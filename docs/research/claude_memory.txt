@@ -1,0 +1,871 @@
+<search query="Claude Code memory system CLAUDE.md auto memory how it works" search_time="2026年9月21日11时1分星期一"><document reference_id="https://code.claude.com/docs/en/memory#storage-location"><title>How Claude remembers your project</title><host>Claude Code</host><snippet>How Claude remembers your project
+Give Claude persistent instructions with CLAUDE.md files, and let Claude accumulate learnings automatically with auto memory.
+Each Claude Code session begins with a fresh context window. Two mechanisms carry knowledge across sessions:
+CLAUDE.md files: instructions you write to give Claude persistent context
+Auto memory: notes Claude writes itself based on your corrections and preferences
+This page covers how to:
+Write and organize CLAUDE.md files
+Scope rules to specific file types
+with <beginning of the code>.md vs auto memory
+Claude Code has two complementary memory systems. Both are loaded at the start of every conversation. Claude treats them as context, not enforced configuration. To block an action regardless of what Claude decides, use a
+PreToolUse hook
+instead. The more specific and concise your instructions, the more consistently Claude follows them.|  | CLAUDE.md files | Auto memory |
+| --- | --- | --- |
+| Who writes it | You | Claude |
+| What it contains | Instructions and rules | Learnings and patterns |
+| Scope | Project, user, or org | Per repository, shared across worktrees |
+| Loaded into | Every session | Every session (first 200 lines or 25KB) |
+| Use for | Coding standards, workflows, project architecture | Your preferences, corrections you give Claude, project context Claude can’t derive from the code |
+
+Use CLAUDE.md files when you want to guide Claude’s behavior. Auto memory lets Claude learn from your corrections without manual effort.
+Subagents can also maintain their own auto memory. See
+subagent configuration
+for details.
+Write effective instructions
+CLAUDE.md files are loaded into the context window at the start of every session, consuming tokens alongside your conversation. The
+context window visualization
+shows where CLAUDE.md loads relative to the rest of the startup context. Because they’re context rather than enforced configuration, how you write instructions affects how reliably Claude follows them. Specific, concise, well-structured instructions work best.
+Size: target under 200 lines per CLAUDE.md file. Longer files consume more context and reduce adherence. If your instructions are growing large, use
+path-scoped rules
+so instructions load only when Claude works with matching files. You can also split content into
+imports
+for organization, though imported files still load and enter the context window at launch.
+Structure: use markdown headers and bullets to group related instructions. Claude scans structure the same way readers do: organized sections are easier to follow than dense paragraphs.
+Specificity: write instructions that are concrete enough to verify. For example:
+“Use 2-space indentation” instead of “Format code properly”
+“Run <beginning of the code>npm test<end of the code> before committing” instead of “Test your changes”
+“API handlers live in <beginning of the code>src/api/handlers/<end of the code> ” instead of “Keep files organized”
+Consistency: if two rules contradict each other, Claude may pick one arbitrarily. Review your CLAUDE.md files, nested CLAUDE.md files in subdirectories, and
+.claude/rules/
+periodically to remove outdated or conflicting instructions. In monorepos, use
+claudeMdExcludes
+to skip CLAUDE.md files from other teams that aren’t relevant to your work.
+Claude Code loads <beginning of the code>CLAUDE.md<end of the code> and <beginning of the code>CLAUDE.local.md<end of the code> from your current working directory and every directory above it. Run Claude Code in <beginning of the code>foo/bar/<end of the code> and it loads instructions from <beginning of the code>foo/bar/CLAUDE.md<end of the code>, <beginning of the code>foo/CLAUDE.md<end of the code>, and any <beginning of the code>CLAUDE.local.md<end of the code> files alongside them.
+All discovered files are concatenated into context rather than overriding each other. Across the...
+Auto memory
+Auto memory lets Claude accumulate knowledge across sessions without you writing anything. As it works, Claude saves four kinds of notes for itself. Claude records the kind as a <beginning of the code>type<end of the code> field in the memory file’s frontmatter:
+<beginning of the code>user<end of the code>: your role, expertise, and working preferences
+<beginning of the code>feedback<end of the code>: corrections you give Claude and approaches you confirm
+<beginning of the code>project<end of the code>: ongoing work, deadlines, and decisions that Claude can’t derive from the code or git history
+<beginning of the code>reference<end of the code>: where to find information outside the project, such as an issue tracker or dashboard
+Claude skips anything it can derive from the codebase, such as architecture, file paths, or debugging fixes. It also skips anything your CLAUDE.md files already say.
+Claude doesn’t save something every session. It decides what’s worth remembering based on whether the information would be useful in a future conversation.
+Enable or disable auto memory
+Auto memory is on by default. To toggle it, open <beginning of the code>/memory<end of the code> in a session and use the auto memory toggle, which saves <beginning of the code>autoMemoryEnabled<end of the code> to your user settings at <beginning of the code>~/.claude/settings.json<end of the code>. To turn it off for a single project, set <beginning of the code>autoMemoryEnabled<end of the code> in that project’s settings:
+{   "autoMemoryEnabled": false }
+To disable auto memory via environment variable, set <beginning of the code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1<end of the code>.
+Storage location
+Each project gets its own memory directory at <beginning of the code>~/.claude/projects/<project>/memory/<end of the code>. The <beginning of the code><project><end of the code> path is derived from the git repository, so all worktrees and subdirectories within the same repo share one auto memory directory. Outside a git repo, the project root is used instead.
+If you set
+CLAUDE_CODE_PROJECT_DIR_NAME
+beside <beginning of the code>CLAUDE_CONFIG_DIR<end of the code>, Claude Code uses that name as the <beginning of the code><project><end of the code> directory under <beginning of the code><config dir>/projects/<end of the code> instead, whichever repository you launch it in, so projects launched with that config directory share one auto memory directory. Requires Claude Code v2.1.234 or later.
+To store auto memory in a different location, set <beginning of the code>autoMemoryDirectory<end of the code> in your <beginning of the code>settings.json<end of the code>. It is read from any
+settings scope
+: user, project, local, policy, or <beginning of the code>--settings<end of the code>.
+{   "autoMemoryDirectory": "~/my-custom-memory-dir" }
+The value must be an absolute path or start with <beginning of the code>~/<end of the code> . When you set it in a project’s <beginning of the code>.claude/settings.json<end of the code> or <beginning of the code>.claude/settings.local.json<end of the code>, Claude Code honors it under the same
+workspace trust rule as hooks in settings files
+.
+The directory contains a <beginning of the code>MEMORY.md<end of the code> index and one topic file per memory:
+~/.claude/projects/<project>/memory/ ├── MEMORY.md           # Index, one line per memory, loaded into every session ├── user_role.md        # One memory ├── feedback_testing.md # One memory └── ...                 # Any other topic files Claude creates
+<beginning of the code>MEMORY.md<end of the code> acts as an index of the memory directory. Claude reads and writes files in this directory throughout your session, using <beginning of the code>MEMORY.md<end of the code> to keep track of what’s stored where.
+Auto memory is machine-local. All worktrees and subdirectories within the same git repository share one auto memory directory. Files are not shared across machines or cloud environments.
+Claude Code deletes old session transcripts after the
+cleanupPeriodDays
+retention period, but excludes the memory files in the memory directory from that
+retention sweep
+. <beginning of the code>MEMORY.md<end of the code> and topic files stay until you or Claude edits or deletes them.
+How it works
+The first 200 lines of <beginning of the code>MEMORY.md<end of the code>, or the first 25KB, whichever comes first, are loaded at the start of every conversation. Content beyond that threshold is not loaded at session start. Claude keeps <beginning of the code>MEMORY.md<end of the code> concise by moving detailed notes into separate topic files.
+After Claude writes to <beginning of the code>MEMORY.md<end of the code>, Claude Code measures the file against the 200-line and 25KB read limits. If the file is near a limit, Claude Code reminds Claude to shorten it: keep one line per entry, move detail into topic files, and merge or drop stale entries. If the file is over a limit, the write still succeeds, but Claude Code returns an
+error telling Claude to rewrite the index
+, because everything past the limit is dropped on the next load.
+This limit applies only to <beginning of the code>MEMORY.md<end of the code>. Claude Code loads a CLAUDE.md file of up to 4 MiB in full and skips a larger file. Shorter files produce better adherence.
+Claude Code doesn’t load topic files such as <beginning of the code>user_role.md<end of the code> or <beginning of the code>feedback_testing.md<end of the code> at startup. Claude reads them on demand using its standard file tools when it needs the information.
+The main conversation’s auto memory isn’t loaded into
+subagents
+; the exception is a
+fork
+, which inherits the parent conversation and system prompt. A subagent’s own auto memory, enabled with the subagent <beginning of the code>memory<end of the code> field, is a separate directory.
+Claude reads and writes memory files during your session. When you see messages like “Saved 2 memories” or “Recalled 2 memories” in the Claude Code interface, Claude is actively updating or reading from <beginning of the code>~/.claude/projects/<project>/memory/<end of the code>.
+When Claude writes a memory file that begins with YAML frontmatter, Claude Code records the write time in a <beginning of the code>modified<end of the code> frontmatter field as an ISO 8601 timestamp. The timestamp shows how current the fact is, both to you and to Claude when it reads the memory back. Any file that has frontmatter gets the field the next time Claude writes it, including files created on earlier versions; Claude Code never adds frontmatter to a file that has none. The <beginning of the code>modified<end of the code> field requires Claude Code v2.1.214 or later.
+Audit and edit your memory
+Auto memory files are plain markdown you can edit or delete at any time. Run
+/memory
+to browse and open memory files from within a session.
+View and edit with <beginning of the code>/memory<end of the code>
+The <beginning of the code>/memory<end of the code> command lists your CLAUDE.md, CLAUDE.local.md, and other memory file locations across user and project scopes, including user and project CLAUDE.md entries for files that don’t exist yet. It also lets you toggle auto memory on or off and provides an option to open the auto memory folder. Select any file to open it in your editor; selecting one that doesn’t exist yet creates it first. To check which files actually loaded into the current session, run <beginning of the code>/context<end of the code>.
+GUI editors such as VS Code open the file in a separate window, and you can keep using the session while it’s open. Before v2.1.216, <beginning of the code>/memory<end of the code> waited for you to close the file before responding. Terminal editors such as Vim take over the terminal until you exit.
+When you ask Claude to remember something, like “always use pnpm, not npm” or “remember that the API tests require a local Redis instance,” Claude saves it to auto memory. To add instructions to CLAUDE.md instead, ask Claude directly, like “add this to CLAUDE.md,” or edit the file yourself via <beginning of the code>/memory<end of the code>.
+I don’t know what auto memory saved
+Run <beginning of the code>/memory<end of the code> and select the auto memory folder to browse what Claude has saved. Everything is plain markdown you can read, edit, or delete.
+My CLAUDE.</snippet><url>https://code.claude.com/docs/en/memory#storage-location</url><last_update_time>2026年9月15日9时47分</last_update_time><text_length>2404</text_length></document><document reference_id="https://docs.anthropic.com/en/docs/claude-code/memory?ref=blog.stdlib.io"><title>How Claude remembers your project</title><host>Anthropic</host><snippet>Core concepts
+How Claude remembers your project
+Give Claude persistent instructions with CLAUDE.md files, and let Claude accumulate learnings automatically with auto memory.
+Each Claude Code session begins with a fresh context window. Two mechanisms carry knowledge across sessions:
+CLAUDE.md files: instructions you write to give Claude persistent context
+Auto memory: notes Claude writes itself based on your corrections and preferences
+This page covers how to:
+Write and organize CLAUDE.md files
+Scope rules to specific file types with <beginning of the code>.claude/rules/<end of the code>
+Configure auto memory so Claude takes notes automatically
+Troubleshoot when instructions aren’t being followed
+CLAUDE.md vs auto memory
+Claude Code has two complementary memory systems. Both are loaded at the start of every conversation. Claude treats them as context, not enforced configuration. The more specific and concise your instructions, the more consistently Claude follows them.|  | CLAUDE.md files | Auto memory |
+| --- | --- | --- |
+| Who writes it | You | Claude |
+| What it contains | Instructions and rules | Learnings and patterns |
+| Scope | Project, user, or org | Per working tree |
+| Loaded into | Every session | Every session (first 200 lines) |
+| Use for | Coding standards, workflows, project architecture | Build commands, debugging insights, preferences Claude discovers |
+
+Use CLAUDE.md files when you want to guide Claude’s behavior. Auto memory lets Claude learn from your corrections without manual effort. Subagents can also maintain their own auto memory. See subagent configuration for details.
+CLAUDE.md files
+CLAUDE.md files are markdown files that give Claude persistent instructions for a project, your personal workflow, or your entire organization. You write these files in plain text; Claude reads them at the start of every session.
+Choose where to put CLAUDE.md files
+CLAUDE.md files can live in several locations, each with a different scope. More specific locations take precedence over broader ones.| Scope | Location | Purpose | Use case examples | Shared with |
+| --- | --- | --- | --- | --- |
+| Managed policy | • macOS: /Library/Application Support/ClaudeCode/CLAUDE.md • Linux and WSL: /etc/claude-code/CLAUDE.md • Windows: C:\Program Files\ClaudeCode\CLAUDE.md | Organization-wide instructions managed by IT/DevOps | Company coding standards, security policies, compliance requirements | All users in organization |
+| Project instructions | ./CLAUDE.md or ./.claude/CLAUDE.md | Team-shared instructions for the project | Project architecture, coding standards, common workflows | Team members via source control |
+| User instructions | ~/.claude/CLAUDE.md | Personal preferences for all projects | Code styling preferences, personal tooling shortcuts | Just you (all projects) |
+
+CLAUDE.md files in the directory hierarchy above the working directory are loaded in full at launch. CLAUDE.md files in subdirectories load on demand when Claude reads files in those directories. See How CLAUDE.md files load for the full resolution order. For large projects, you can break instructions into topic-specific files using project rules. Rules let you scope instructions to specific file types or subdirectories.
+A project CLAUDE.md can be stored in either <beginning of the code>./CLAUDE.md<end of the code> or <beginning of the code>./.claude/CLAUDE.md<end of the code>. Create this file and add instructions that apply to anyone working on the project: build and test commands, coding standards, architectural decisions, naming conventions, and common workflows. These instructions are shared with your team through version control, so focus on project-level standards rather than personal preferences.
+Run <beginning of the code>/init<end of the code> to generate a starting CLAUDE.md automatically. Claude analyzes your codebase and creates a file with build commands, test instructions, and project conventions it discovers. If a CLAUDE.md already exists, <beginning of the code>/init<end of the code> suggests improvements rather than overwriting it. Refine from there with instructions Claude wouldn’t discover on its own.
+md files are loaded into the context window at the start of every session, consuming tokens alongside your conversation. Because they’re context rather than enforced configuration, how you write instructions affects how reliably Claude follows them. Specific, concise, well-structured instructions work best.  Size: target under 200 lines per CLAUDE.md file. Longer files consume more context and reduce adherence. If your instructions are growing large, split them using imports or <beginning of the code>.claude/rules/<end of the code> files.  Structure: use markdown headers and bullets to group related instructions. If you decline, the imports stay disabled and the dialog does not appear again.
+md files load
+Claude Code reads CLAUDE.md files by walking up the directory tree from your current working directory, checking each directory along the way. This means if you run Claude Code in <beginning of the code>foo/bar/<end of the code>, it loads instructions from both <beginning of the code>foo/bar/CLAUDE.md<end of the code> and <beginning of the code>foo/CLAUDE.md<end of the code> . Claude also discovers CLAUDE.md files in subdirectories under your current working directory. Instead of loading them at launch, they are included when Claude reads files in those subdirectories. If you work in a large monorepo where other teams’ CLAUDE.md files get picked up, use <beginning of the code>claudeMdExcludes<end of the code> to skip them.
+Load from additional directories
+The <beginning of the code>--add-dir<end of the code> flag gives Claude access to additional directories outside your main working directory. For larger projects, you can organize instructions into multiple files using the <beginning of the code>.claude/rules/<end of the code> directory. This keeps instructions modular and easier for teams to maintain. Rules can also be scoped to specific file paths, so they only load into context when Claude works with matching files, reducing noise and saving context space.
+<beginning of the code>
+~/.claude/rules/
+├── preferences.md    # Your personal coding preferences
+└── workflows.md      # Your preferred workflows
+<end of the code>
+User-level rules are loaded before project rules, giving project rules higher priority.
+Manage CLAUDE.md for large teams
+For organizations deploying Claude Code across teams, you can centralize instructions and control which CLAUDE.md files are loaded.
+Deploy organization-wide CLAUDE.Organizations can deploy a centrally managed CLAUDE.md that applies to all users on a machine. This file cannot be excluded by individual settings.
+Create the file at the managed policy location
+macOS: <beginning of the code>/Library/Application Support/ClaudeCode/CLAUDE.md<end of the code>
+Linux and WSL: <beginning of the code>/etc/claude-code/CLAUDE.md<end of the code>
+Windows: <beginning of the code>C:\Program Files\ClaudeCode\CLAUDE.md<end of the code>
+In large monorepos, ancestor CLAUDE.md files may contain instructions that aren’t relevant to your work. The <beginning of the code>claudeMdExcludes<end of the code> setting lets you skip specific files by path or glob pattern. This example excludes a top-level CLAUDE.md and a rules directory from a parent folder.     "**/monorepo/CLAUDE.md",
+    "/home/user/monorepo/other-team/.You can configure <beginning of the code>claudeMdExcludes<end of the code> at any settings layer: user, project...
+Auto memory
+Auto memory lets Claude accumulate knowledge across sessions without you writing anything. Claude saves notes for itself as it works: build commands, debugging insights, architecture notes, code style preferences, and workflow habits. Claude doesn’t save something every session. It decides what’s worth remembering based on whether the information would be useful in a future conversation.
+Auto memory requires Claude Code v2.1.59 or later. Check your version with <beginning of the code>claude --version<end of the code>.
+Enable or disable auto memory
+Auto memory is on by default. To toggle it, open <beginning of the code>/memory<end of the code> in a session and use the auto memory toggle, or set <beginning of the code>autoMemoryEnabled<end of the code> in your project settings:
+<beginning of the code>
+{
+  "autoMemoryEnabled": false
+}
+<end of the code>
+To disable auto memory via environment variable, set <beginning of the code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1<end of the code> .
+Storage location
+Each project gets its own memory directory at <beginning of the code>~/.claude/projects/<project>/memory/<end of the code>. The <beginning of the code><project><end of the code> path is derived from the git repository, so all worktrees and subdirectories within the same repo share one auto memory directory. Outside a git repo, the project root is used instead. To store auto memory in a different location, set <beginning of the code>autoMemoryDirectory<end of the code> in your user or local settings:
+<beginning of the code>
+{
+  "autoMemoryDirectory": "~/my-custom-memory-dir"
+}
+<end of the code>
+This setting is accepted from policy, local, and user settings. It is not accepted from project settings (<beginning of the code>.claude/settings.json<end of the code>) to prevent a shared project from redirecting auto memory writes to sensitive locations. The directory contains a <beginning of the code>MEMORY.md<end of the code> entrypoint and optional topic files:
+<beginning of the code>
+~/.claude/projects/<project>/memory/
+├── MEMORY.md          # Concise index, loaded into every session
+├── debugging.md       # Detailed notes on debugging patterns
+├── api-conventions.md # API design decisions
+└── ...                # Any other topic files Claude creates
+<end of the code>
+<beginning of the code>MEMORY.md<end of the code> acts as an index of the memory directory. Claude reads and writes files in this directory throughout your session, using <beginning of the code>MEMORY.md<end of the code> to keep track of what’s stored where. Auto memory is machine-local. All worktrees and subdirectories within the same git repository share one auto memory directory. Files are not shared across machines or cloud environments.
+How it works
+The first 200 lines of <beginning of the code>MEMORY.md<end of the code> are loaded at the start of every conversation. Content beyond line 200 is not loaded at session start. Claude keeps <beginning of the code>MEMORY.md<end of the code> concise by moving detailed notes into separate topic files. This 200-line limit applies only to <beginning of the code>MEMORY.md<end of the code>. CLAUDE.md files are loaded in full regardless of length, though shorter files produce better adherence. Topic files like <beginning of the code>debugging.md<end of the code> or <beginning of the code>patterns.md<end of the code> are not loaded at startup. Claude reads them on demand using its standard file tools when it needs the information. Claude reads and writes memory files during your session. When you see “Writing memory” or “Recalled memory” in the Claude Code interface, Claude is actively updating or reading from <beginning of the code>~/.claude/projects/<project>/memory/<end of the code>.
+Audit and edit your memory
+Auto memory files are plain markdown you can edit or delete at any time. Run <beginning of the code>/memory<end of the code> to browse and open memory files from within a session.
+View and edit with <beginning of the code>/memory<end of the code>
+The <beginning of the code>/memory<end of the code> command lists all CLAUDE.md and rules files loaded in your current session, lets you toggle auto memory on or off, and provides a link to open the auto memory folder. Select any file to open it in your editor. When you ask Claude to remember something, like “always use pnpm, not npm” or “remember that the API tests require a local Redis instance,” Claude saves it to auto memory. To add instructions to CLAUDE.md instead, ask Claude directly, like “add this to CLAUDE.md,” or edit the file yourself via <beginning of the code>/memory<end of the code>.
+Troubleshoot memory issues
+These are the most common issues with CLAUDE.md and auto memory, along with steps to debug them.
+md files are being loaded. If a file isn’t listed, Claude can’t see it.
+I don’t know what auto memory saved
+Run <beginning of the code>/memory<end of the code> and select the auto memory folder to browse what Claude has saved. Everything is plain markdown you can read, edit, or delete.
+My CLAUDE.</snippet><url>https://docs.anthropic.com/en/docs/claude-code/memory?ref=blog.stdlib.io</url><last_update_time>2026年2月22日12时28分</last_update_time><text_length>2384</text_length></document><document reference_id="https://code.claude.com/docs/fr/memory"><title>Comment Claude se souvient de votre projet</title><host>Claude Code</host><snippet>Claude Code charge <beginning of the code>CLAUDE.md<end of...
+ vous pouvez toujours le conserver comme le seul fichier que chaque outil partage en mettant une importation <beginning of the code>@AGENTS.md<end of the code> dans un <beginning of the code>CLAUDE.md<end of the code> à côté. Faites cela quand votre projet a aussi un <beginning of the code>CLAUDE.md<end of the code>, quand vous avez défini Instructions du projet sur <beginning of the code>claude-md<end of the code>, ou dans les sessions qui
+ne peuvent pas charger
+AGENTS.md
+. Ajoutez toutes les instructions spécifiques à Claude sous l’importation, et Claude lit le fichier importé en premier, puis le reste :
+CLAUDE.md
+@AGENTS.md ## Claude Code Use plan mode for changes under `src/billing/`.
+Si vous n’avez pas besoin de contenu spécifique à Claude, un lien symbolique fonctionne aussi :
+ln -s AGENTS.md CLAUDE.md
+La commande n’imprime rien en cas de succès. Avant de choisir le lien symbolique plutôt que l’importation, vérifiez ces contraintes :
+Édition : Claude lit <beginning of the code>CLAUDE.md<end of the code> via le lien, mais les outils Edit et Write
+refusent d’écrire via un lien symbolique
+, et le refus dirige Claude à éditer la cible du lien, <beginning of the code>AGENTS.md<end of the code>, à la place
+Windows : si vous ou quelqu’un qui clone le référentiel travaillez sur Windows, utilisez l’importation <beginning of the code>@AGENTS.md<end of the code> à la place. Créer un lien symbolique là nécessite les privilèges d’administrateur ou le mode développeur, et Git vérifie un lien symbolique validé comme un fichier texte brut sauf si <beginning of the code>core.symlinks<end of the code> est activé, ce qui laisse ce clone avec un <beginning of the code>CLAUDE.md<end of the code> d’une ligne à la place de vos instructions
+Avec l’une ou l’autre approche, exécutez <beginning of the code>/context<end of the code> dans votre prochaine session et confirmez que <beginning of the code>CLAUDE.md<end of the code> apparaît sous Fichiers de mémoire.
+Migrer les instructions d’autres outils
+L’exécution de
+/init
+lit les fichiers d’instructions d’autres outils et incorpore les parties pertinentes dans le <beginning of the code>CLAUDE.md<end of the code> généré :
+Règles Cursor dans <beginning of the code>.cursor/rules/<end of the code> ou <beginning of the code>.cursorrules<end of the code>
+Règles Copilot dans <beginning of the code>.github/copilot-instructions.md<end of the code>
+Avec <beginning of the code>CLAUDE_CODE_NEW_INIT=1<end of the code> défini : <beginning of the code>AGENTS.md<end of the code>, <beginning of the code>.devin/rules/<end of the code>, <beginning of the code>.windsurf/rules/<end of the code> ou <beginning of the code>.windsurfrules<end of the code>, et <beginning of the code>.clinerules<end of the code>
+Vous pouvez également exécuter
+/import
+pour apporter la configuration d’un agent de codage pris en charge dans Claude Code, qui ajoute une copie unique de fichiers d’instructions tels que <beginning of the code>AGENTS.md<end of the code> au <beginning of the code>CLAUDE.md<end of the code> correspondant et transporte les serveurs MCP, les commandes, les sous-agents et les compétences. Nécessite Claude Code v2.1.213 ou une version ultérieure.
+Mémoire automatique
+La mémoire automatique permet à Claude d’accumuler des connaissances d’une session à l’autre sans que vous n’écriviez rien. Au fur et à mesure qu’il travaille, Claude enregistre quatre types de notes pour lui-même. Claude enregistre le type sous la forme d’un champ <beginning of the code>type<end of the code> dans le frontmatter du fichier de mémoire :
+<beginning of the code>user<end of the code> : votre rôle, expertise et préférences de travail
+<beginning of the code>feedback<end of the code> : les corrections que vous donnez à Claude et les approches que vous confirmez
+<beginning of the code>project<end of the code> : le travail en cours, les délais et les décisions que Claude ne peut pas déduire du code ou de l’historique git
+<beginning of the code>reference<end of the code> : où trouver des informations en dehors du projet, comme un suivi de problèmes ou un tableau de bord
+Claude ignore tout ce qu’il peut déduire de la base de code, comme l’architecture, les chemins de fichiers ou les correctifs de débogage. Il ignore également tout ce que vos fichiers CLAUDE.md disent déjà.
+Claude ne sauvegarde pas quelque chose à chaque session. Il décide ce qui vaut la peine d’être mémorisé en fonction de si l’information serait utile dans une conversation future.
+Activer ou désactiver la mémoire automatique
+La mémoire automatique est activée par défaut. Pour la basculer, ouvrez <beginning of the code>/memory<end of the code> dans une session et utilisez le bouton bascule de mémoire automatique, qui enregistre <beginning of the code>autoMemoryEnabled<end of the code> dans vos paramètres utilisateur à <beginning of the code>~/.claude/settings.json<end of the code>. Pour la désactiver pour un seul projet, définissez <beginning of the code>autoMemoryEnabled<end of the code> dans les paramètres de ce projet :
+{   "autoMemoryEnabled": false }
+Pour désactiver la mémoire automatique via une variable d’environnement, définissez <beginning of the code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1<end of the code>.
+Emplacement de stockage
+Chaque projet obtient son propre répertoire de mémoire à <beginning of the code>~/.claude/projects/<project>/memory/<end of the code>. Le chemin <beginning of the code><project><end of the code> est dérivé du référentiel git, donc tous les worktrees et sous-répertoires dans le même référentiel partagent un répertoire de mémoire automatique. En dehors d’un référentiel git, la racine du projet est utilisée à la place.
+Si vous définissez
+CLAUDE_CODE_PROJECT_DIR_NAME
+à côté de <beginning of the code>CLAUDE_CONFIG_DIR<end of the code>, Claude Code utilise ce nom comme répertoire <beginning of the code><project><end of the code> sous <beginning of the code><config dir>/projects/<end of the code> quel que soit le référentiel dans lequel vous le lancez, donc les projets lancés avec ce répertoire de configuration partagent un répertoire de mémoire automatique. Nécessite Claude Code v2.1.234 ou ultérieur.
+Pour stocker la mémoire automatique dans un emplacement différent, définissez <beginning of the code>autoMemoryDirectory<end of the code> dans votre <beginning of the code>settings.json<end of the code>. Il est lu à partir de n’importe quel
+scope de paramètres
+: utilisateur, projet, local, politique, ou <beginning of the code>--settings<end of the code>.
+{   "autoMemoryDirectory": "~/my-custom-memory-dir" }
+La valeur doit être un chemin absolu ou commencer par <beginning of the code>~/<end of the code> .
+Lorsqu’elle est définie dans le <beginning of the code>.claude/settings.json<end of the code> ou <beginning of the code>.claude/settings.local.json<end of the code> d’un projet, Claude Code l’honore selon la même
+règle de confiance de l’espace de travail que les hooks dans les fichiers de paramètres
+. Tandis que
+permissions.blockReadsOutsideWorkingDirectories
+est activé, Claude Code ne charge aucune mémoire automatique à partir d’un répertoire qu’un
+fichier de paramètres fourni par le référentiel
+choisit et n’en sauvegarde aucune, où que ce répertoire se trouve.
+Le répertoire contient un index <beginning of the code>MEMORY.md<end of the code> et un fichier de sujet par mémoire :
+~/.claude/projects/<project>/memory/ ├── MEMORY.md           # Index, une ligne par mémoire, chargé dans chaque session ├── user_role.md        # Une mémoire ├── feedback_testing.md # Une mémoire └── ...                 # Tout autre fichier de sujet que Claude crée
+<beginning of the code>MEMORY.md<end of the code> agit comme un index du répertoire de mémoire. Claude lit et écrit des fichiers dans ce répertoire tout au long de votre session, en utilisant <beginning of the code>MEMORY.md<end of the code> pour garder une trace de ce qui est stocké où.
+La mémoire automatique est locale à la machine. Tous les worktrees et sous-répertoires dans le même référentiel git partagent un répertoire de mémoire automatique. Les fichiers ne sont pas partagés entre les machines ou les environnements cloud.
+Claude Code supprime les anciennes transcriptions de session après la période de rétention
+cleanupPeriodDays
+, mais exclut les fichiers de mémoire du répertoire de mémoire de ce
+balayage de rétention
+. <beginning of the code>MEMORY.md<end of the code> et les fichiers de sujet restent jusqu’à ce que vous ou Claude les modifiiez ou les supprimiez.
+Comment ça marche
+Les 200 premières lignes de <beginning of the code>MEMORY.md<end of the code>, ou les premiers 25 KB, selon ce qui vient en premier, sont chargés au début de chaque conversation. Le contenu au-delà de ce seuil n’est pas chargé au démarrage de la session. Claude garde <beginning of the code>MEMORY.md<end of the code> concis en déplaçant les notes détaillées dans des fichiers de sujet séparés.
+Après que Claude écrive dans <beginning of the code>MEMORY.md<end of the code>, Claude Code mesure le fichier par rapport aux limites de lecture de 200 lignes et 25 KB. Si le fichier est proche d’une limite, Claude Code rappelle à Claude de le raccourcir : garder une ligne par entrée, déplacer les détails dans les fichiers de sujet, et fusionner ou supprimer les entrées obsolètes. Si le fichier dépasse une limite, l’écriture réussit toujours, mais Claude Code retourne une
+erreur indiquant à Claude de réécrire l’index
+, car tout ce qui dépasse la limite est supprimé au prochain chargement.
+Cette limite s’applique uniquement à <beginning of the code>MEMORY.md<end of the code>. Claude Code charge un fichier CLAUDE.md de jusqu’à 4 MiB en intégralité et ignore un fichier plus volumineux. Les fichiers plus courts produisent une meilleure adhérence.
+Claude Code ne charge pas les fichiers de sujet tels que <beginning of the code>user_role.md<end of the code> ou <beginning of the code>feedback_testing.md<end of the code> au démarrage. Claude les lit à la demande en utilisant ses outils de fichiers standard quand il a besoin de l’information.
+La mémoire automatique de la conversation principale n’est pas chargée dans les
+sous-agents
+; l’exception est un
+fork
+ qui hérite de la conversation parent et de l’invite système. La propre mémoire automatique d’un sous-agent, activée avec le champ <beginning of the code>memory<end of the code> du sous-agent, est un répertoire séparé.
+Claude lit et écrit les fichiers de mémoire pendant votre session. Quand vous voyez des messages comme « Saved 2 memories » ou « Recalled 2 memories » dans l’interface Claude Code, Claude met activement à jour ou lit à partir de <beginning of the code>~/.claude/projects/<project>/memory/<end of the code>.
+Quand Claude écrit un fichier de mémoire qui commence par du frontmatter YAML, Claude Code enregistre l’heure d’écriture dans un champ frontmatter <beginning of the code>modified<end of the code> sous la forme d’un horodatage ISO 8601. L’horodatage montre à quel point le fait est actuel, à la fois pour vous et pour Claude quand il relit la mémoire. Tout fichier qui a du frontmatter obtient le champ la prochaine fois que Claude l’écrit,</snippet><url>https://code.claude.com/docs/fr/memory</url><last_update_time>2026年9月20日10时28分</last_update_time><text_length>2677</text_length></document><document reference_id="https://code.claude.com/docs/es/memory"><title>Cómo Claude recuerda su proyecto</title><host>Claude Code</host><snippet>Proporcione a Claude instrucciones persistentes con archivos CLAUDE.md o AGENTS.md, y permita que Claude acumule aprendizajes automáticamente con auto memory.
+Cada sesión de Claude Code comienza con una ventana de contexto nueva. Dos mecanismos llevan el conocimiento entre sesiones:
+Archivos CLAUDE.md: instrucciones que usted escribe para dar a Claude contexto persistente. Claude también puede leer archivos
+AGENTS.md
+de un repositorio, por sí solos o junto con CLAUDE.md
+Auto memory: notas que Claude escribe por sí mismo basadas en sus correcciones y preferencias
+CLAUDE.md vs auto memory
+Claude Code tiene dos sistemas de memoria complementarios. Ambos se cargan al inicio de cada conversación. Claude los trata como contexto, no como configuración forzada. Para bloquear una acción independientemente de lo que Claude decida, use un
+hook PreToolUse
+en su lugar. Cuanto más específicas y concisas sean sus instrucciones, más consistentemente Claude las seguirá.
+Use arch...
+Ejecutar
+/init
+lee los archivos de instrucciones de otras herramientas e incorpora las partes relevantes en el <beginning of the code>CLAUDE.md<end of the code> generado:
+Reglas de Cursor en <beginning of the code>.cursor/rules/<end of the code> o <beginning of the code>.cursorrules<end of the code>
+Reglas de Copilot en <beginning of the code>.github/copilot-instructions.md<end of the code>
+Con <beginning of the code>CLAUDE_CODE_NEW_INIT=1<end of the code> establecido: <beginning of the code>AGENTS.md<end of the code>, <beginning of the code>.devin/rules/<end of the code>, <beginning of the code>.windsurf/rules/<end of the code> o <beginning of the code>.windsurfrules<end of the code>, y <beginning of the code>.clinerules<end of the code>
+También puede ejecutar
+/import
+para traer la configuración de un agente de codificación compatible a Claude Code, que agrega una copia única de archivos de instrucciones como <beginning of the code>AGENTS.md<end of the code> al <beginning of the code>CLAUDE.md<end of the code> coincidente y traslada servidores MCP, comandos, subagentes y skills. Requiere Claude Code v2.1.213 o posterior.
+Auto memory
+Auto memory permite que Claude acumule conocimiento entre sesiones sin que usted escriba nada. Mientras trabaja, Claude guarda cuatro tipos de notas para sí mismo. Claude registra el tipo como un campo <beginning of the code>type<end of the code> en el frontmatter del archivo de memoria:
+<beginning of the code>user<end of the code>: su rol, experiencia y preferencias de trabajo
+<beginning of the code>feedback<end of the code>: correcciones que usted le da a Claude y enfoques que usted confirma
+<beginning of the code>project<end of the code>: trabajo en curso, plazos y decisiones que Claude no puede derivar del código o del historial de git
+<beginning of the code>reference<end of the code>: dónde encontrar información fuera del proyecto, como un rastreador de problemas o un panel de control
+Claude omite cualquier cosa que pueda derivar del código base, como arquitectura, rutas de archivo o correcciones de depuración. También omite cualquier cosa que sus archivos CLAUDE.md ya digan.
+Claude no guarda algo cada sesión. Decide qué vale la pena recordar basándose en si la información sería útil en una conversación futura.
+Habilitar o deshabilitar auto memory
+Auto memory está habilitado de forma predeterminada. Para alternarlo, abra <beginning of the code>/memory<end of the code> en una sesión y use el botón de alternancia de auto memory, que guarda <beginning of the code>autoMemoryEnabled<end of the code> en la configuración de usuario en <beginning of the code>~/.claude/settings.json<end of the code>. Para desactivarlo en un único proyecto, establezca <beginning of the code>autoMemoryEnabled<end of the code> en la configuración de ese proyecto:
+{   "autoMemoryEnabled": false }
+Para deshabilitar auto memory a través de variable de entorno, establezca <beginning of the code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1<end of the code>.
+Ubicación de almacenamiento
+Cada proyecto obtiene su propio directorio de memoria en <beginning of the code>~/.claude/projects/<project>/memory/<end of the code>. La ruta <beginning of the code><project><end of the code> se deriva del repositorio git, por lo que todos los worktrees y subdirectorios dentro del mismo repositorio comparten un directorio de auto memory. Fuera de un repositorio git, se usa la raíz del proyecto en su lugar.
+Si establece
+CLAUDE_CODE_PROJECT_DIR_NAME
+junto a <beginning of the code>CLAUDE_CONFIG_DIR<end of the code>, Claude Code usa ese nombre como el directorio <beginning of the code><project><end of the code> bajo <beginning of the code><config dir>/projects/<end of the code> en lugar de cualquier repositorio que inicie, por lo que los proyectos iniciados con ese directorio de configuración comparten un directorio de auto memory. Requiere Claude Code v2.1.234 o posterior.
+Para almacenar auto memory en una ubicación diferente, establezca <beginning of the code>autoMemoryDirectory<end of the code> en su <beginning of the code>settings.json<end of the code>. Se lee desde cualquier
+ámbito de configuración
+: usuario, proyecto, local, política, o <beginning of the code>--settings<end of the code>.
+{   "autoMemoryDirectory": "~/my-custom-memory-dir" }
+El valor debe ser una ruta absoluta o comenzar con <beginning of the code>~/<end of the code> .
+Cuando se establece en <beginning of the code>.claude/settings.json<end of the code> o <beginning of the code>.claude/settings.local.json<end of the code> de un proyecto, Claude Code lo respeta bajo la misma
+regla de confianza del espacio de trabajo que los hooks en archivos de configuración
+. Mientras
+permissions.blockReadsOutsideWorkingDirectories
+está activado, Claude Code no carga auto memory desde un directorio que un
+archivo de configuración suministrado por el repositorio
+elige y no guarda nada en él, dondequiera que se encuentre ese directorio.
+El directorio contiene un índice <beginning of the code>MEMORY.md<end of the code> y un archivo de tema por memoria:
+~/.claude/projects/<project>/memory/ ├── MEMORY.md           # Índice, una línea por memoria, cargado en cada sesión ├── user_role.md        # Una memoria ├── feedback_testing.md # Una memoria └── ...                 # Cualquier otro archivo de tema que Claude cree
+<beginning of the code>MEMORY.md<end of the code> actúa como un índice del directorio de memoria. Claude lee y escribe archivos en este directorio durante su sesión, usando <beginning of the code>MEMORY.md<end of the code> para mantener un registro de lo que se almacena dónde.
+Auto memory es local de la máquina. Todos los worktrees y subdirectorios dentro del mismo repositorio git comparten un directorio de auto memory. Los archivos no se comparten entre máquinas o entornos en la nube.
+Claude Code elimina transcripciones de sesiones antiguas después del período de retención
+cleanupPeriodDays
+, pero excluye los archivos de memoria en el directorio de memoria de ese
+barrido de retención
+. <beginning of the code>MEMORY.md<end of the code> y los archivos de tema permanecen hasta que usted o Claude los edite o elimine.
+Cómo funciona
+Las primeras 200 líneas de <beginning of the code>MEMORY.md<end of the code>, o los primeros 25KB, lo que sea menor, se cargan al inicio de cada conversación. El contenido más allá de ese umbral no se carga al inicio de la sesión. Claude mantiene <beginning of the code>MEMORY.md<end of the code> conciso moviendo notas detalladas a archivos de tema separados.
+Después de que Claude escribe en <beginning of the code>MEMORY.md<end of the code>, Claude Code mide el archivo contra los límites de lectura de 200 líneas y 25KB. Si el archivo está cerca de un límite, Claude Code le recuerda a Claude que lo acorte: mantenga una línea por entrada, mueva detalles a archivos de tema y combine o elimine entradas obsoletas. Si el archivo supera un límite, la escritura aún tiene éxito, pero Claude Code devuelve un
+error indicándole a Claude que reescriba el índice
+, porque todo lo que está más allá del límite se descarta en la siguiente carga.
+Este límite se aplica solo a <beginning of the code>MEMORY.md<end of the code>. Claude Code carga un archivo CLAUDE.md de hasta 4 MiB en su totalidad y omite un archivo más grande. Los archivos más cortos producen mejor adherencia.
+Claude Code no carga archivos de tema como <beginning of the code>user_role.md<end of the code> o <beginning of the code>feedback_testing.md<end of the code> al iniciar. Claude los lee bajo demanda usando sus herramientas de archivo estándar cuando necesita la información.
+La auto memory de la conversación principal no se carga en
+subagentes
+; la excepción es un
+fork
+ que hereda la conversación principal y el prompt del sistema. La auto memory propia de un subagente, habilitada con el campo <beginning of the code>memory<end of the code> del subagente, es un directorio separado.
+Claude lee y escribe archivos de memoria durante su sesión. Cuando ve mensajes como “Saved 2 memories” o “Recalled 2 memories” en la interfaz de Claude Code, Claude está actualizando o leyendo activamente desde <beginning of the code>~/.claude/projects/<project>/memory/<end of the code>.
+Cuando Claude escribe un archivo de memoria que comienza con frontmatter YAML, Claude Code registra la hora de escritura en un campo <beginning of the code>modified<end of the code> del frontmatter como una marca de tiempo ISO 8601. La marca de tiempo muestra cuán actual es el hecho, tanto para usted como para Claude cuando lo vuelve a leer. Cualquier archivo que tenga frontmatter obtiene el campo la próxima vez que Claude lo escribe, incluidos los archivos creados en versiones anteriores; Claude Code nunca agrega frontmatter a un archivo que no lo tenga. El campo <beginning of the code>modified<end of the code> requiere Claude Code v2.1.214 o posterior.
+Auditar y editar su memoria
+Los archivos de auto memory son markdown plano que puede editar o eliminar en cualquier momento. Ejecute
+/memory
+para examinar y abrir archivos de memoria desde dentro de una sesión.
+Ver y editar con <beginning of the code>/memory<end of the code>
+El comando <beginning of the code>/memory<end of the code> enumera sus archivos CLAUDE.md, CLAUDE.local.md y otros archivos de memoria en los ámbitos de usuario y proyecto, incluidas las entradas CLAUDE.md de usuario y proyecto para archivos que aún no existen. También le permite alternar auto memory activado o desactivado y proporciona una opción para abrir la carpeta de auto memory. Seleccione cualquier archivo para abrirlo en su editor; seleccionar uno que aún no existe lo crea primero. Para verificar qué archivos <beginning of the code>CLAUDE.md<end of the code> y archivos de reglas se cargaron en la sesión actual, ejecute <beginning of the code>/context<end of the code>.
+Los editores GUI como VS Code abren el archivo en una ventana separada, y puede seguir usando la sesión mientras está abierto. Antes de v2.1.216, <beginning of the code>/memory<end of the code> esperaba a que cerrara el archivo antes de responder. Los editores de terminal como Vim toman el control del terminal hasta que salga.
+Cuando le pide a Claude que recuerde algo, como “siempre usar pnpm, no npm” o “recuerde que las pruebas de API requieren una instancia local de Redis”, Claude lo guarda en auto memory. Para agregar instrucciones a CLAUDE.md en su lugar, pídale a Claude directamente, como “agregue esto a CLAUDE.md”,</snippet><url>https://code.claude.com/docs/es/memory</url><last_update_time>2026年9月20日10时19分</last_update_time><text_length>2721</text_length></document><document reference_id="https://support.claude.com/en/articles/14553240-give-claude-context-claude-md-and-better-prompts"><title>Give Claude context: CLAUDE.md and better prompts</title><host>Anthropic Help Center</host><snippet>Give Claude context: CLAUDE.md and better prompts
+April 15, 2026
+Claude Code works well out of the box, but it becomes noticeably more effective once it knows your project's conventions and once you adopt a few prompting habits. This guide covers both.
+Part 1 — CLAUDE.md: your project's memory
+What it is
+<beginning of the code>CLAUDE.md<end of the code> is a plain markdown file that Claude automatically reads at the start of every session in that directory. Think of it as the briefing you would give a capable new teammate on their first morning: how the team does things, what to avoid, and where the important pieces live.
+You do not need to reference it in prompts or attach it manually. If the file exists, Claude has already read it.
+Where it lives
+Claude looks in a few places and merges what it finds, from broad to specific:
+Location
+Scope
+Good for
+<beginning of the code>~/.claude/CLAUDE.md<end of the code>
+Every project on your machine
+Personal preferences (for example, "I use pnpm, not npm" or "always suggest tests").
+<beginning of the code><repo-root>/CLAUDE.md<end of the code>
+This project
+Architecture, conventions, and commands. This is the main one.
+<beginning of the code><subdir>/CLAUDE.md<end of the code>
+That subdirectory (loaded on demand when Claude reads files in that directory, not at session start)
+Module-specific rules (for example, different conventions in <beginning of the code>frontend/<end of the code> vs <beginning of the code>api/<end of the code> ).
+Most teams only need the project-root file. Commit it to git so the whole team benefits.
+How it's loaded (and what it costs)
+The files at and above your working directory are read at session start and delivered to Claude as a user message immediately after the system prompt (not embedded inside the system prompt itself). Subdirectory <beginning of the code>CLAUDE.md<end of the code> files are loaded on demand later, when Claude reads files in that subdirectory. There is no summarization or truncation, and it is not re-read from disk on each turn. If you edit the file mid-session, the change is picked up the next time you run <beginning of the code>/compact<end of the code> or open it via <beginning of the code>/memory<end of the code>; otherwise it takes effect on your next session.
+For Claude for Enterprise customers, the cost picture is better than "loaded on every request" might suggest. Claude Code applies Anthropic's prompt caching to <beginning of the code>CLAUDE.md<end of the code>. The first request in a session pays the full input-token price for the file; subsequent requests within roughly five minutes of each other hit the cache and are billed at the much lower cache-read rate. The cache is content-addressed, so any change to <beginning of the code>CLAUDE.md<end of the code> invalidates it and the next request pays full price again.
+In practice this means a sizeable <beginning of the code>CLAUDE.md<end of the code> costs full tokens once per session, plus once after any idle gap long enough for the cache to expire, rather than once per message. It is still worth keeping the file lean for context-window space and signal-to-noise, but you do not need to ration lines purely to control per-message spend. In the Enterprise usage dashboard, the file's footprint will show up almost entirely as cache-read tokens rather than standard input tokens.
+Getting started: run <beginning of the code>/init<end of the code>
+In any project, type <beginning of the code>/init<end of the code>. Claude will explore the codebase and draft a <beginning of the code>CLAUDE.md<end of the code> for you, covering build commands, test commands, a structure overview, and any conventions it detects. Review the draft, remove anything inaccurate, and commit it. This takes about five minutes and pays off permanently.
+What actually belongs in it
+Aim for a file that is short and signal-dense — under roughly 200 lines. Every line is loaded into context on every request, so each one should be worth its cost.
+Worth including:
+Commands — how to build, test, lint, and run locally. Claude will execute these, so accuracy matters.
+Conventions — naming, error handling, file layout, and "we use X, not Y" decisions.
+Architecture in three sentences — what the major pieces are and how they communicate.
+Hard constraints — for example, "never write to the production database from tests," "all API routes need auth middleware," or "do not edit <beginning of the code>generated/<end of the code>."
+Known gotchas — the issues every new engineer trips on.
+Not worth including:
+Full API documentation (Claude can read the code directly).
+Changelogs or history.
+Anything that is already obvious from the file tree.
+Aspirational rules the team does not actually follow.
+How often to update it
+Treat it like a living onboarding doc, not a spec.
+After <beginning of the code>/init<end of the code> — review once to clean up the generated draft.
+When Claude gets something wrong twice — that is the signal a rule is missing. Add one line to address it.
+When conventions change — for example, a new framework, test runner, or set of lint rules.
+Quarterly skim — delete anything stale, since outdated instructions are worse than none.
+You can also add to it mid-session: open <beginning of the code>/memory<end of the code> to edit the file directly, or just ask Claude to "remember" a rule and it will append it to the right <beginning of the code>CLAUDE.md<end of the code> for you.
+Part 2 — Prompting habits that pay off in Claude Code
+These are not generic prompt-engineering tips; they are the habits that matter most specifically when Claude is reading and editing a real codebase.
+1. State the outcome, not the steps
+Claude can explore the codebase itself. Tell it what you want and why, and let it figure out where.
+❌ "Open <beginning of the code>userService.ts<end of the code>, find the <beginning of the code>validate<end of the code> function, add a null check on line 42."
+✅ "Users with no email are crashing the validation step. Make it handle that gracefully and add a test."
+2. Give it the error, verbatim
+Paste the full stack trace rather than summarizing it. The exact filename, line number, and message are what allow Claude to find the right location quickly.
+3. Scope big tasks with Plan Mode first
+For anything touching more than a couple of files, press Shift+Tab twice to cycle into plan mode (the first press enters acceptEdits) and ask:
+"Plan how you'd add rate limiting to the public API. Don't change anything yet."
+Review the plan, adjust it in conversation, then switch modes and say "do step 1." This catches misunderstandings before they turn into a twelve-file diff.
+4. Point at files when you already know them
+Claude can search the codebase on its own, but if you already know the relevant file, say so — it is faster and uses fewer tokens. Use <beginning of the code>@<end of the code> to reference paths, for example <beginning of the code>@src/auth/login.ts<end of the code> .
+5. Say what "done" looks like
+Examples include "tests pass," "matches the style of the other handlers," or "no new dependencies." Stating acceptance criteria up front is more efficient than several rounds of revision.
+6. One task per conversation; <beginning of the code>/clear<end of the code> between them
+Long sessions accumulate noise. When you switch from "fix the login bug" to "refactor the billing module," run <beginning of the code>/clear<end of the code> and start fresh. Your <beginning of the code>CLAUDE.md<end of the code> carries the durable context forward, so the chat history does not need to.
+7. Correct it like a colleague, not a search engine
+If the first answer is off, you do not need to rephrase the whole request. Simply say what is wrong — for example, "That changes the public API; keep the signature the same." Claude will keep everything else and adjust only that point.
+Quick reference| Want to… | Do this |
+| --- | --- |
+| Generate a starting CLAUDE.md | /init |
+| See what memory Claude is using | /memory |
+| Add a rule mid-session | Open /memory, or ask Claude to "remember" the rule |
+| Start fresh but keep project memory | /clear |
+| Reference a specific file in a prompt | @path/to/file |
+
+On this page
+Part 1 — CLAUDE.md: your project's memory
+Part 2 — Prompting habits that pay off in Claude Code</snippet><url>https://support.claude.com/en/articles/14553240-give-claude-context-claude-md-and-better-prompts</url><publish_time>2026年4月15日0时0分</publish_time><text_length>2151</text_length></document><document reference_id="https://claudecodeguide.dev/docs/foundations/memory-system"><title>Claude Code Memory System</title><host>Claude Code Guide</host><snippet>Foundations
+Claude Code Memory System
+By default, Claude forgets everything when you close a session. The memory system fixes that. Here's how it works and how to set it up without overthinking it.
+Why Memory Matters
+Every time you start a new Claude Code session, it begins with a blank slate. Without memory, you spend the first few minutes of every conversation re-explaining who you are, what you're working on, and how you like things done.
+The memory system fixes this. It gives Claude Code a structured way to remember you, your projects, and your preferences across sessions. Think of it as building a relationship with your tool instead of meeting a stranger every time.
+Memory loads automatically
+Both <beginning of the code>CLAUDE.md<end of the code> files and your <beginning of the code>MEMORY.md<end of the code> index are loaded automatically at session start. <beginning of the code>CLAUDE.md<end of the code> loads in full. <beginning of the code>MEMORY.md<end of the code> loads the first 200 lines (or 25KB). You don't need hooks or manual config: it just works.
+Memory loads automatically at session start
+The Two Memory Systems
+Claude Code has two complementary memory systems. Understanding both is the key to a great experience.
+1. CLAUDE.md (You Write It)
+CLAUDE.md files are instructions you write for Claude. They tell it about your project, your preferences, and your rules.| File | Where it lives | What it does |
+| --- | --- | --- |
+| ./CLAUDE.md or ./.claude/CLAUDE.md | Project root | Project-specific: tech stack, build commands, coding rules |
+| ~/.claude/CLAUDE.md | Home directory | Global: your role, preferences, applies to all projects |
+| CLAUDE.local.md | Project root (gitignored) | Personal project preferences you don't want to share with your team |
+
+All CLAUDE.md files load automatically at session start. Subdirectory CLAUDE.md files load lazily when Claude reads files in that directory.
+2. Auto Memory (Claude Writes It)
+Auto memory is Claude writing notes to itself. When it discovers something important: your preferred build command, a debugging insight, an architecture decision: it saves it for next time. This is on by default.| Detail | Value |
+| --- | --- |
+| Storage | ~/.claude/projects//memory/ (per git repo) |
+| Index | MEMORY.md: loaded at session start (first 200 lines / 25KB) |
+| Topic files | debugging.md, api-conventions.md, etc.: loaded on demand |
+| Toggle | Run /memory to turn on/off or browse files |
+
+Auto memory is what makes Claude get better over time without you doing anything. It notices patterns, saves corrections, and builds context automatically.
+What About Config?
+Config files (<beginning of the code>.claude/settings.json<end of the code>) are separate from memory. They control technical settings: which tools are allowed, model preferences, permissions. Memory is knowledge. Config is plumbing.
+Organizing Your Memory (Recommended Pattern)
+Auto memory creates topic files organically. But if you want more structure, especially for teams or complex setups, here's a four-category pattern that works well in practice:
+1. User Memory
+Who you are and what you care about.
+Your role (frontend developer, PM, full-stack engineer)
+Your goals ("I'm building a SaaS product", "I'm learning React")
+Your preferences: coding style, communication style, tools you use
+Your team context: who you work with, what they own
+A <beginning of the code>user_role.md<end of the code> file might say: "Senior PM at an EdTech company. Manages 3 squads. Prefers bullet points over paragraphs. Hates em dashes."
+2. Feedback Memory
+Corrections you've given Claude Code over time.
+"Don't suppress lint rules as a fix, rethink the solution"
+"Always use relative paths, never absolute paths with usernames"
+"Her name is Viveca, not Viveka"
+This is the most powerful category. Every correction you make gets saved, and Claude Code stops making that mistake. Auto memory captures many of these automatically, but explicit feedback files give you more control.
+3. Project Memory
+What you're actively working on.
+Project names, tech stacks, and current status
+Key decisions and their rationale
+Architecture notes and patterns specific to each project
+Links to relevant repos, boards, or documents
+A <beginning of the code>project_heimdall.md<end of the code> file, for example, tracks an ad server replacement project: its version, test count, team members, and related design documents.
+4. Reference Memory
+Where to find things in external systems.
+API endpoints and credential locations (never the actual secrets)
+Folder structures and file conventions
+Tool configurations: CI/CD, deployment, monitoring
+Team ownership maps
+This prevents Claude Code from guessing where things live. Instead of searching your codebase every time, it knows exactly where to look.
+This is a pattern, not a requirement
+These four categories are a recommended organizational pattern, not built into Claude Code. Auto memory creates its own topic files organically. You can use this structure, auto memory alone, or combine both. Whatever fits your workflow.
+How Memory is Structured
+Memory lives in <beginning of the code>~/.claude/projects/<project>/memory/<end of the code> for each git repo:| File | Purpose | Loaded when? |
+| --- | --- | --- |
+| MEMORY.md | The index. Lists all topic files with one-line summaries. | Automatically at session start (first 200 lines) |
+| Topic files (debugging.md, api-conventions.md, etc.) | Detailed context on specific topics | On demand when relevant |
+
+Each topic file is a small Markdown file with frontmatter (name, description, type) and focused content. Keep them short. One topic per file.
+<beginning of the code>MEMORY.md<end of the code> acts as a table of contents. Claude reads it at the start of every session, then loads individual topic files when they're relevant. If you use the four-category pattern, you might have files like <beginning of the code>user_role.md<end of the code>, <beginning of the code>feedback_no_em_dashes.md<end of the code>, <beginning of the code>project_heimdall.md<end of the code>, or <beginning of the code>reference_api_endpoints.md<end of the code>.
+The /memory Command
+The <beginning of the code>/memory<end of the code> command is your dashboard for everything memory-related. Run it to:
+See all loaded context: every CLAUDE.md, CLAUDE.local.md, and rules file currently active
+Toggle auto memory on or off for the current project
+Browse memory files: get a link to open the memory folder
+Open files in your editor: quickly edit any memory file
+/memory in action
+You don't need to run <beginning of the code>/memory<end of the code> to use memory. It loads automatically. This command is for when you want to inspect, toggle, or edit what's there.
+What NOT to Save
+Not everything belongs in memory:
+Code patterns and syntax: Claude Code already knows how to write code. Saving "how to write a React hook" is wasted space.
+Git history: It can read your git log directly. No need to duplicate it.
+Debugging solutions: One-off fixes that rarely repeat. Save the lesson, not the fix.
+Temporary context: If it won't matter next week, don't save it.
+The rule of thumb: save things that change how Claude Code behaves, not things it can look up on its own.
+The Compound Effect
+Memory builds over time, and the returns accelerate.
+Week 1: Sessions start faster. Claude Code knows your name, your projects, and your preferred coding style. You stop repeating "I'm working on Project X using Next.js."
+Month 1: Claude Code stops making mistakes you've corrected before. It remembers that your teammate's name is spelled a specific way, that you never want <beginning of the code>any<end of the code> types in TypeScript, that you prefer colons over em dashes.
+Month 3: Claude Code starts anticipating what you need. It knows which files to check first, which patterns your codebase uses, which team members own which systems. It feels less like a tool and more like a colleague who's been on your team for a while.
+Getting Started Checklist
+The simplest start: just use Claude Code. Auto memory is on by default. After a few sessions, run <beginning of the code>/memory<end of the code> to see what it's captured.
+Want to go further? Build on top of auto memory:
+on Run <beginning of the code>/memory<end of the code> to see what's already been saved automatically
+on Write a <beginning of the code>CLAUDE.md<end of the code> in your project with your tech stack and coding rules
+on Create a <beginning of the code>CLAUDE.local.md<end of the code> for personal preferences you don't want in Git
+on Add a <beginning of the code>~/.claude/CLAUDE.md<end of the code> with your role and global preferences
+on After a correction, ask Claude to save it as a feedback memory
+on Review your <beginning of the code>MEMORY.md<end of the code> index periodically and prune stale entries
+You don't need to build the whole system at once. Auto memory handles the basics. The structured approach adds precision on top. The best memory systems are grown, not designed upfront.
+When memory grows large and you add specialized agents and scheduled jobs alongside it, the discipline shifts from what to save to what to keep out of context. The subagent context-isolation pattern covers the walls that make a growing system stay sharp.
+Why Memory Matters The Two Memory Systems 1. CLAUDE.md (You Write It) 2. Auto Memory (Claude Writes It) What About Config? Organizing Your Memory (Recommended Pattern) 1. User Memory 2. Feedback Memory 3. Project Memory 4. Reference Memory How Memory is Structured The /memory Command What NOT to Save The Compound Effect Getting Started Checklist</snippet><url>https://claudecodeguide.dev/docs/foundations/memory-system</url><last_update_time>2026年9月5日14时18分</last_update_time><text_length>2482</text_length></document><document reference_id="https://claude-code-guide.org/memory/"><title>Auto Memory</title><host>claude-code-guide.org</host><snippet>Auto Memory
+Level: 🌱 Beginner Source: Memory
+Claude Code remembers things about your project across sessions — automatically. When you correct Claude, share a preference, or Claude discovers something useful, it saves a note so the same lesson doesn’t need repeating.
+This happens without any setup. Auto memory is on by default.
+How Claude Remembers: Two Systems
+Claude Code has two complementary memory systems:| Aspect | CLAUDE.md | Auto Memory |
+| --- | --- | --- |
+| Who writes it | You (or /init ) | Claude |
+| Contains | Project instructions, conventions, rules | Observations, corrections, patterns Claude learned |
+| Where it lives | ./CLAUDE.md (in your repo) | ~/.claude/projects//memory/MEMORY.md |
+| Shared with team? | Yes (committed to git) | No (personal, outside repo) |
+| When it’s read | Every session | Every session |
+| How to edit | Any text editor, or ask Claude | /memory command, or ask Claude |
+
+Analogy: CLAUDE.md is the team onboarding document — shared instructions everyone follows. Auto memory is your personal notebook — things Claude learned from working specifically with you on this project.
+What Gets Saved
+Claude saves things it learns during your sessions:
+Build commands: “This project uses <beginning of the code>pnpm<end of the code> not <beginning of the code>npm<end of the code>”
+Debugging insights: “The auth service needs Redis running locally”
+Corrections you make: “Use camelCase for variables, not snake_case”
+Preferences: “User prefers Vitest over Jest”
+Patterns: “API routes follow the <beginning of the code>/api/v2/<end of the code> prefix convention”
+Environment details: “Staging deploys require VPN connection”
+What a real MEMORY.md looks like
+# Project Memory ## Build & Test - Uses pnpm, not npm
+- Test command: pnpm vitest run
+- Lint must pass before commits (pre-commit hook)
+
+## Conventions - camelCase for variables and functions
+- PascalCase for React components
+- API routes use /api/v2/ prefix
+
+## Debugging - Auth tests need Redis running: docker compose up redis
+- E2E tests flaky on CI — retry once before investigating
+
+## User Preferences - Prefers concise commit messages (one line)
+- Wants tests written alongside implementation, not after
+
+Where Memory Lives
+Auto memory files are stored outside your project repository:
+<beginning of the code>
+~/.claude/projects/<project>/memory/MEMORY.md
+<end of the code>
+MEMORY.md is the entrypoint, but you can create additional topic files (e.g., <beginning of the code>debugging.md<end of the code> , <beginning of the code>patterns.md<end of the code>) in the same directory and link to them from MEMORY.md. This keeps the main file concise while preserving detailed notes in dedicated files.
+200-line limit: The first 200 lines of MEMORY.md, or the first 25KB, whichever comes first, are loaded at the start of every conversation. Content beyond that threshold is not loaded at session start — use topic files for detailed notes.
+This means:
+Memory is personal — each developer has their own memory for each project
+Memory stays out of git — it won’t clutter your repo or appear in diffs
+Memory is per working tree — all worktrees within the same git repo share one auto memory directory, but Claude’s memories for project A don’t leak into project B
+Memory persists across sessions — start a new conversation and Claude still knows
+Viewing and Editing Memory
+The /memory command
+The quickest way to see what Claude has saved:
+<beginning of the code>
+/memory
+<end of the code>
+This opens your memory files for viewing and editing. You can add, modify, or delete any entries.
+Ask Claude to remember something
+Just tell Claude in natural language:
+<beginning of the code>
+"Remember that our staging API is at staging.example.com and requires the VPN"
+<end of the code>
+<beginning of the code>
+"Always use pnpm in this project, never npm"
+<end of the code>
+Claude saves these to auto memory so future sessions have the information.
+Ask Claude to forget something
+<beginning of the code>
+"Forget about the Redis requirement — we switched to an in-memory cache"
+<end of the code>
+<beginning of the code>
+"Stop using snake_case — we changed to camelCase last week"
+<end of the code>
+Claude removes or updates the relevant memory entry.
+Check what Claude knows
+<beginning of the code>
+"What do you remember about this project?"
+<end of the code>
+<beginning of the code>
+"What's in your memory about our test setup?"
+<end of the code>
+Claude reads its memory and tells you what it has stored.
+🌿 How Memory and CLAUDE.md Work Together
+Auto memory and CLAUDE.md form a layered configuration system. Each layer has a role:| Layer | Who it’s for | What belongs there |
+| --- | --- | --- |
+| CLAUDE.md | The whole team | Project conventions, build commands, architecture decisions |
+| CLAUDE.local.md | You, for this project | Personal overrides, local environment quirks |
+| Auto memory | You, learned by Claude | Corrections, patterns Claude discovered, things you told Claude to remember |
+
+Claude reads all three every session. They complement each other:
+CLAUDE.md says “run <beginning of the code>pnpm test<end of the code> before committing” → the team standard
+CLAUDE.local.md says “I use port 3001 instead of 3000” → your local tweak
+Auto memory says “user prefers verbose test output with <beginning of the code>--reporter=verbose<end of the code> ” → Claude learned this from you
+When to promote memory to CLAUDE.md
+Watch for memory entries that should really be team knowledge:
+A convention that every developer should follow, not just you
+A build command or environment requirement that’s project-wide
+An architectural decision that Claude should always know about
+When you spot these, move them from auto memory into CLAUDE.md so the whole team benefits.
+🌿 The Full Configuration Picture
+Auto memory is one piece of Claude Code’s layered configuration. Here’s where everything fits:| Source | Scope | Who writes | Shared? | Purpose |
+| --- | --- | --- | --- | --- |
+| Managed settings | Organization | IT/admin | Enforced | Enterprise policy |
+| CLAUDE.md | Project | You/team | Yes (git) | Project instructions |
+| CLAUDE.local.md | Project | You | No | Personal project overrides |
+| .claude/settings.json | Project | You/team | Yes (git) | Permissions, model, tools |
+| .claude/settings.local.json | Project | You | No | Personal setting overrides |
+| ~/.claude/settings.json | Global | You | No | Your preferences, all projects |
+| Auto memory | Project | Claude | No | Learned patterns and corrections |
+
+Auto memory is unique in this list: it’s the only layer that Claude writes. Everything else is configured by humans.
+Tips
+Don’t over-correct. If Claude gets something wrong once, a quick correction in the conversation is fine. If it keeps getting the same thing wrong, then tell it to remember.
+Review periodically. Run <beginning of the code>/memory<end of the code> every few weeks. Remove entries that are outdated or no longer accurate. Stale memories can steer Claude in the wrong direction.
+Use CLAUDE.md for team knowledge. Auto memory is personal. If a convention matters for everyone on the team, put it in CLAUDE.md where it’s versioned and shared.
+Let Claude learn naturally. You don’t need to front-load everything into memory. Claude picks up patterns as you work together — corrections, preferences, and project details accumulate organically over time.
+Memory has a size limit. MEMORY.md is loaded into context every session. Keep it focused and concise, just like CLAUDE.md. If memory grows too large, prune entries that Claude could figure out on its own.</snippet><url>https://claude-code-guide.org/memory/</url><last_update_time>2026年6月19日9时31分</last_update_time><text_length>2247</text_length></document><document reference_id="https://formation-claudecode.com/blog/memoire-persistante-claude-code-guide-2026"><title>Mémoire persistante Claude Code : guide complet 2026</title><host>formation-claudecode.com</host><snippet>Pourquoi la mémoire persistante change tout dans Claude Code {#pourquoi}
+CLAUDE.md vs Auto Memory : quelle différence ?CLAUDE.md : les règles que vous écrivez
+Auto Memory : les notes que Claude écrit lui-même
+La mémoire persistante Claude Code est devenue le sujet qui obsède les développeurs IA en mai 2026. Anthropic a poussé sa Memory Tool en beta publique le 23 avril, le plugin communautaire claude-mem a franchi sa version 12.6.4 le 5 mai, et agentmemory est arrivé sur Product Hunt le 19 mai. Trois solutions concurrentes, trois philosophies, et un même problème à résoudre : éviter que votre agent IA n'oublie tout entre deux sessions.
+Pourquoi la mémoire persistante change tout dans Claude Code {#pourquoi}
+Chaque session Claude Code démarre avec une fenêtre de contexte vierge. Cela signifie que toutes les décisions architecturales, les conventions de code, les bugs résolus la veille — tout disparaît dès que vous tapez <beginning of the code>/exit<end of the code>. Sur un projet de plusieurs semaines, le coût en tokens et en temps devient brutal : vous re-expliquez les mêmes choses, l'agent re-découvre les mêmes pièges.
+La mémoire persistante Claude Code résout ce problème en stockant l'expérience accumulée dans un emplacement durable (fichier, base SQLite, store API) puis en réinjectant les éléments pertinents au démarrage de la session suivante. Le résultat est mesurable : Rakuten rapporte 97 % d'erreurs en moins dès la première itération sur ses agents en tâche longue, Wisedocs a vu sa vérification de documents accélérer de 30 % une fois la mémoire activée sur Claude Managed Agents.
+Pour un développeur solo, le gain est tout aussi tangible : un agent qui se souvient de vos commandes de build, de vos préférences de style, et des bugs déjà rencontrés vous fait gagner plusieurs heures par semaine.
+Les 3 solutions de mémoire persistante en 2026 {#solutions}
+En mai 2026, trois approches dominent l'écosystème de la mémoire à long terme pour agents IA :
+| Solution | Type | Stockage | Idéal pour |
+| --- | --- | --- | --- |
+| CLAUDE.md + Auto Memory | Intégré natif | Fichiers Markdown | Tous les projets Claude Code |
+| Memory Tool (Anthropic) | API officielle | Filesystem /mnt/memory/ | Agents API + Managed Agents |
+| claude-mem | Plugin open source | SQLite local + compression IA | Sessions Claude Code longues |
+
+Chaque option répond à un besoin distinct. CLAUDE.md sert à figer les règles immuables (style, build, conventions), Auto Memory capture les apprentissages dynamiques, claude-mem compresse des sessions entières en observations typées, et le Memory Tool officiel s'adresse aux agents construits via l'Agent SDK ou Managed Agents.
+CLAUDE.md vs Auto Memory : quelle différence ? {#claude-md-vs-auto}
+C'est la première confusion à lever : Claude Code embarque deux systèmes de mémoire natifs distincts, et ils ne servent pas à la même chose.
+CLAUDE.md : les règles que vous écrivez
+<beginning of the code>CLAUDE.md<end of the code> est un fichier Markdown placé à la racine de votre projet, versionné avec Git, et chargé automatiquement au début de chaque session. C'est l'endroit où vous écrivez les règles stables que tous les membres de l'équipe doivent partager :
+Commandes de build, test, lint (<beginning of the code>pnpm vitest<end of the code> plutôt que <beginning of the code>npm test<end of the code>)
+Conventions de nommage et style de code
+Stack technique et dépendances clés
+Un CLAUDE.md minimaliste (30 secondes à créer) améliore immédiatement la pertinence de chaque réponse. Pour aller plus loin sur la structuration du contexte, consultez notre guide gérer le contexte Claude Code avec /compact.
+Auto Memory : les notes que Claude écrit lui-même
+Auto Memory est un mécanisme automatique activé par défaut depuis 2026. Claude Code stocke ses propres notes persistantes dans <beginning of the code>~/.claude/projects//memory/<end of the code>, avec un fichier index <beginning of the code>MEMORY.md<end of the code> (max 200 lignes ou 25 Ko chargés au démarrage). L'agent y écrit ce qu'il apprend de vos corrections : préférences personnelles, retours d'expérience, bugs récurrents, choix architecturaux non documentés ailleurs.
+La règle d'arbitrage est simple : ce qui doit être partagé avec l'équipe → CLAUDE.md (Git). Ce qui est personnel ou émerge de l'usage → Auto Memory (local, non versionné).
+Cette vidéo de Sophiene IA détaille les 6 niveaux de mémoire de Claude Code et la hiérarchie complète.
+Quand CLAUDE.md et Auto Memory ne suffisent plus — typiquement sur des sessions très longues où l'historique pèse des dizaines de milliers de tokens — claude-mem prend le relais. Le plugin open source d'Alex Newman écoute chaque <beginning of the code>SessionStart<end of the code>, observe tout ce que fait l'agent, puis compresse les événements via le Claude Agent SDK avant de les stocker en SQLite.
+ vérifie les dépendances via <beginning of the code>smart-install.js<end of the code>, puis...
+Les réglages se trouvent dans <beginning of the code>~/.claude-mem/settings.json<end of the code> (créé avec valeurs par défaut au premier lancement). Vous y configurez :
+Le modèle de compression (Haiku 4.5 par défaut, économique)
+Le port du worker en arrière-plan
+Le niveau de log et le répertoire de données
+Les paramètres d'injection du contexte (taille max, types d'observations à recharger)
+À chaque démarrage de session, claude-mem affiche un petit tableau d'observations récentes en haut de la conversation (ID, timestamp, titre) — typiquement des entrées de type <beginning of the code>bugfix<end of the code> , <beginning of the code>discovery<end of the code> , <beginning of the code>decision<end of the code>. La distillation est cruciale : la transcription brute d'une session pèse souvent 20-50K tokens, claude-mem la réduit à quelques centaines de tokens d'observations typées.
+Si vous explorez les agents IA open source comme alternative aux solutions propriétaires, la formation OpenClaw sur les agents IA auto-hébergés couvre l'intégration mémoire avec les écosystèmes ouverts.
+Bonnes pratiques pour gérer la mémoire de vos agents IA {#bonnes-pratiques}
+Activer une mémoire persistante Claude Code ne suffit pas : mal utilisée, elle dégrade les performances en saturant la fenêtre de contexte au démarrage. Voici les règles à respecter en 2026.
+1. Hiérarchiser ce qui mérite d'être mémorisé
+Tout n'est pas bon à garder. Les bonnes mémoires :
+Une décision architecturale et son rationale ("on a choisi Convex plutôt que Supabase car...")
+Un bug non évident et sa correction ("le hook <beginning of the code>useEffect<end of the code> se déclenche deux fois en dev à cause de Strict Mode")
+Une convention qui n'apparaît pas dans le code ("les migrations doivent toujours être réversibles")
+Une préférence confirmée du développeur ("toujours utiliser pnpm, jamais npm")
+Les mauvaises mémoires : code commenté, résultats de commandes ponctuelles, état temporaire de la conversation.
+2. Garder MEMORY.md sous 200 lignes
+Seules les 200 premières lignes (ou 25 Ko) de <beginning of the code>MEMORY.md<end of the code> sont chargées à chaque session. Au-delà, votre mémoire devient inutile. Pour les détails qui débordent, créez des fichiers séparés (<beginning of the code>feedback_testing.md<end of the code> , <beginning of the code>project_constraints.md<end of the code> ...) et ajoutez seulement des pointeurs dans MEMORY.md.
+3. Vérifier les mémoires avant d'agir
+Les mémoires vieillissent. Une note qui dit "le fichier X existe" était vraie au moment de l'écriture — pas forcément aujourd'hui. Avant de recommander une action basée sur une mémoire, vérifiez l'état actuel du code (grep, lecture du fichier). Une mémoire qui contredit la réalité doit être mise à jour ou supprimée.
+4. Séparer mémoire et plan
+La mémoire sert au long terme (préférences, décisions, incidents passés). Pour le travail en cours, utilisez les plans Claude Code ou les listes de tâches — pas la mémoire. C'est un piège classique des débutants qui pollue MEMORY.md avec des to-do d'une session unique.
+5. Auditer régulièrement
+Toutes les 2-4 semaines, ouvrez <beginning of the code>MEMORY.md<end of the code> et le dossier <beginning of the code>memory/<end of the code> pour purger les entrées obsolètes. Une mémoire propre vaut mieux qu'une mémoire abondante. Pour un guide complet sur les meilleures pratiques de Claude Code, consultez notre article meilleures pratiques Claude Code.
+FAQ Mémoire persistante Claude Code {#faq}
+Quelle est la différence entre CLAUDE.md et la mémoire persistante Claude Code ?
+CLAUDE.md est un fichier de règles que vous écrivez vous-même et versionnez dans Git pour toute l'équipe. La mémoire persistante (Auto Memory, claude-mem, Memory Tool) est un système qui stocke automatiquement les apprentissages de l'agent au fil des sessions. Les deux sont complémentaires : règles fixes dans CLAUDE.md, expérience dynamique dans la mémoire.
+Faut-il installer claude-mem si on a déjà CLAUDE.md ?
+Oui, ils ne couvrent pas le même besoin. CLAUDE.md fige les règles partagées (style, build, conventions), tandis que claude-mem compresse les observations de session (bugs résolus, décisions, surprises) qui seraient sinon perdues. Sur les projets de plus de quelques heures de travail, claude-mem fait gagner un temps considérable.
+La mémoire persistante consomme-t-elle plus de tokens ?
+À l'écriture, oui : la compression IA (via Haiku ou Sonnet) coûte quelques centimes par session. Au chargement, non — c'est même l'inverse : recharger 500 tokens d'observations typées coûte beaucoup moins cher que de re-générer le même contexte à chaque session.
+Le Memory Tool d'Anthropic fonctionne-t-il avec Claude Code en CLI ?
+Pas directement. Le Memory Tool est conçu pour les agents construits via l'Agent SDK ou déployés via Managed Agents. Pour Claude Code en CLI, utilisez CLAUDE.md + Auto Memory natifs, complétés éventuellement par claude-mem pour les sessions longues.
+Comment effacer la mémoire de Claude Code ?
+Pour Auto Memory : supprimez le contenu de <beginning of the code>~/.claude/projects//memory/<end of the code> (ou éditez <beginning of the code>MEMORY.md<end of the code> à la main). Pour claude-mem : la commande <beginning of the code>claude-mem clear<end of the code> réinitialise la base SQLite. Pour le Memory Tool : utilisez l'API ou la Claude Console pour vider le memory store du workspace.
+La mémoire persistante est-elle sécurisée ?
+Tout dépend de la solution. CLAUDE.md, Auto Memory et claude-mem restent 100 % locaux (votre disque, votre contrôle). Le Memory Tool d'Anthropic stocke dans l'infrastructure Anthropic mais reste scopé au workspace que vous contrôlez. agentmemory et autres SaaS hébergent les données chez le prestataire — à éviter pour du code propriétaire sensible. Pour les enjeux de sécurité plus larges, consultez notre guide sécurité des assistants IA de code 2026.
+Conclusion
+La mémoire persistante Claude Code n'est plus une option en 2026 — c'est ce qui sépare un agent IA jetable d'un véritable assistant de développement à long terme. Commencez simple : créez un CLAUDE.md à la racine de votre projet, activez Auto Memory (déjà actif par défaut), puis ajoutez claude-mem si vos sessions dépassent les 2 heures. Pour des agents construits via SDK, le Memory Tool officiel reste la référence.
+L'erreur à ne pas faire : empiler les solutions sans hiérarchiser. Une mémoire bien structurée vaut dix fois mieux qu'une mémoire abondante mais incohérente.
+</snippet><url>https://formation-claudecode.com/blog/memoire-persistante-claude-code-guide-2026</url><publish_time>2026年5月20日0时0分</publish_time><text_length>2719</text_length></document><document reference_id="https://y-agent.github.io/inside-claude-code/17-memory-hierarchy.html"><title>Memory Hierarchy</title><host>y-agent.github.io</host><snippet>Tier 1: Project Memory – The L1 Cache
+The fastest, most local tier is the MEMORY.md file and its associated topic files, stored in the auto-memory directory at <beginning of the code>~/.claude/projects/<sanitized-git-root>/memory/<end of the code>. This tier is the agent’s equivalent of an L1 cache: small, fast to read, always loaded into context.
+Structure and Constraints
+<beginning of the code>MEMORY.md<end of the code> is not a freeform notebook. It is an index – a line-per-entry manifest that points to topic files:
+- [User role](user_role.md) -- senior backend engineer, Go specialist
+- [Testing policy](feedback_testing.md) -- always use real DB, never mock
+- [Auth rewrite](project_auth.md) -- driven by compliance, not tech debt
+The index is subject to hard caps defined in <beginning of the code>memdir.ts<end of the code> :
+export const MAX_ENTRYPOINT_LINES = 200
+export const MAX_ENTRYPOINT_BYTES = 25_000  // ~25KB
+When either cap is exceeded, the <beginning of the code>truncateEntrypointContent<end of the code> function truncates at the cap boundary and appends a warning instructing the agent to keep entries concise. The byte cap targets a specific failure mode: long-line indexes that slip past the line cap (observed at p100: 197KB under 200 lines).
+Four-Type Taxonomy
+Memories are constrained to a closed four-type taxonomy defined in <beginning of the code>memoryTypes.ts<end of the code> :
+user – the user’s role, goals, preferences, expertise level
+feedback – guidance on approach, both corrections and confirmations
+project – ongoing work, deadlines, decisions not derivable from code
+reference – pointers to external systems (Linear projects, Grafana dashboards)
+The taxonomy is deliberately exclusionary. Information that is derivable from the current project state – code patterns, architecture, git history, file structure – is explicitly banned. The rationale is that derived information decays: a memory claiming “the auth module is in <beginning of the code>src/auth/<end of the code>” becomes dangerously stale after a refactor, while <beginning of the code>grep<end of the code> and <beginning of the code>git log<end of the code> remain authoritative. Each topic file carries typed frontmatter:
+---
+name: Testing policy
+description: Integration tests must hit a real database, not mocks
+type: feedback
+---
+Integration tests must use a real database connection.
+**Why:** Prior incident where mock/prod divergence masked a broken migration.
+**How to apply:** Any test file touching DB access must connect to the test database.
+Recall-Side Safety
+A dedicated section in the memory prompt (<beginning of the code>TRUSTING_RECALL_SECTION<end of the code> in <beginning of the code>memoryTypes.ts<end of the code>) guards against a subtle failure mode: the agent recommending something from memory that no longer exists. The instruction is precise – if a memory names a file path, check the file exists; if it names a function, grep for it. The section was eval-validated: without it, the agent went 0/3 on cases where a remembered function had been renamed; with it, 3/3.
+Tier 2: Session Memory – The L2 Cache
+Session memory is a within-session scratchpad maintained by a background subagent. While T1 project memory persists across sessions, session memory captures the state of the current conversation: what is being worked on, what commands were run, what errors were encountered. It feeds directly into the compaction system (Post 04): when context is compacted, session memory provides the structured summary that replaces the lost messages.
+Threshold-Based Triggering
+Session memory extraction does not run on every turn. It is gated by a dual-threshold system defined in <beginning of the code>sessionMemoryUtils.ts<end of the code> :
+export const DEFAULT_SESSION_MEMORY_CONFIG: SessionMemoryConfig = {
+minimumMessageTokensToInit: 10000,   // ~10K tokens before first extraction
+minimumTokensBetweenUpdate: 5000,    // ~5K token growth between updates
+toolCallsBetweenUpdates: 3,          // at least 3 tool calls between updates
+}
+The shouldExtractMemory function implements a conjunction-with-fallback policy: extraction triggers when both thresholds are met (tokens AND tool calls), OR when the token threshold is met and the last assistant turn has no tool calls (a natural conversation break). The token threshold is always required – even if the tool-call count is met, extraction does not fire until enough new context has accumulated. This prevents excessive extractions during rapid tool-use sequences.
+Structured Template
+The session memory file is written to a fixed path at <beginning of the code>~/.claude/sessions/{session}/session_memory.md<end of the code> and follows a fixed template with ten sections (defined in <beginning of the code>prompts.ts<end of the code> ):| Section | Purpose |
+| --- | --- |
+| Session Title | 5–10 word distinctive title |
+| Current State | What is actively being worked on |
+| Task Specification | What the user asked to build |
+| Files and Functions | Important files and their roles |
+| Workflow | Bash commands and their interpretation |
+| Errors & Corrections | Failures and fixes |
+| Codebase and System Documentation | System components and architecture |
+| Learnings | Insights and patterns discovered during the session |
+| Key Results | Important outputs and deliverables produced |
+| Worklog | Step-by-step terse summary |
+
+Each section has a per-section cap of 2,000 tokens and the total file is capped at 12,000 tokens. When a section exceeds its cap, the extraction prompt includes explicit instructions to condense. The subagent is restricted to a single tool: <beginning of the code>FileEditTool<end of the code> targeting only the session memory file path. It cannot read arbitrary files, run commands, or write anywhere else.
+Tier 3: End-of-Turn Extraction – The Write-Back Buffer
+The most architecturally interesting tier is the end-of-turn extraction system in <beginning of the code>extractMemories.ts<end of the code>. It runs once at the end of each complete query loop – when the model produces a final response with no tool calls – and writes durable memories to the auto-memory directory. Think of it as a write-back buffer: the agent accumulates observations during the conversation (in its ephemeral context), and the extraction agent periodically flushes the worth-remembering subset to persistent storage.
+The Forked Agent Pattern
+Extraction uses the <beginning of the code>runForkedAgent<end of the code> pattern – a perfect fork of the main conversation that shares the parent’s prompt cache. This is a cost optimization: the forked agent inherits the system prompt and tool definitions from the parent’s cached prefix, so it pays only for the extraction prompt and any new tokens it generates. The fork is configured with:
+<beginning of the code>skipTranscript: true<end of the code> – the extraction agent’s messages are not recorded to the session transcript (avoiding race conditions with the main thread)
+<beginning of the code>maxTurns: 5<end of the code> – a hard cap preventing verification rabbit-holes from burning turns
+Restricted Tool Permissions
+The extraction agent operates under a strict permission sandbox defined by <beginning of the code>createAutoMemCanUseTool<end of the code> :
+%%{init: {'theme': 'neutral', 'flowchart': {'useMaxWidth': false, 'htmlLabels': true, 'padding': 20, 'nodeSpacing': 30, 'rankSpacing': 40}, 'themeVariables': {'primaryColor': '#8B9DAF', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#6E7F91', 'secondaryColor': '#9CAF88', 'secondaryTextColor': '#ffffff', 'secondaryBorderColor': '#7A8D68', 'tertiaryColor': '#C2856E', 'tertiaryTextColor': '#ffffff', 'tertiaryBorderColor': '#A06A54', 'lineColor': '#B5A99A', 'textColor': '#4A4A4A', 'mainBkg': '#8B9DAF', 'nodeBorder': '#6E7F91', 'clusterBkg': 'rgba(139,157,175,0.12)', 'clusterBorder': '#B5A99A', 'edgeLabelBackground': 'transparent'}}}%%
+flowchart TD
+  subgraph UNRESTRICTED["Unrestricted (read-only)"]
+    READ["<b>Read</b> -- unrestricted"]
+    GREP["<b>Grep</b> -- unrestricted"]
+    GLOB["<b>Glob</b> -- unrestricted"]
+  end
+
+  subgraph SCOPED["Scoped (memory dir only)"]
+    EDIT["<b>Edit</b> -- memory dir only"]
+    WRITE["<b>Write</b> -- memory dir only"]
+    BASH_RO["<b>Bash</b> -- read-only only"]
+  end
+
+  subgraph DENIED["Denied"]
+    BASH_W["<b>Bash (write)</b> -- denied"]
+    OTHER["<b>All other tools</b> -- denied"]
+  end
+
+  style READ fill:#8B9DAF,color:#fff,stroke:#6E7F91
+  style GREP fill:#9CAF88,color:#fff,stroke:#7A8D68
+  style GLOB fill:#C2856E,color:#fff,stroke:#A06A54
+  style EDIT fill:#B39EB5,color:#fff,stroke:#8E7A93
+  style WRITE fill:#C4A882,color:#fff,stroke:#A08562
+  style BASH_RO fill:#8E9B7A,color:#fff,stroke:#6E7B5A
+  style BASH_W fill:#8B9DAF,color:#fff,stroke:#6E7F91
+  style OTHER fill:#9CAF88,color:#fff,stroke:#7A8D68
+Figure 2: Tool permissions for the end-of-turn extraction subagent, organized into three tiers. Unrestricted (read-only): Read, Grep, and Glob operate without restrictions. Scoped (memory directory only): Edit and Write are limited to the auto-memory directory via isAutoMemPath() validation; Bash is restricted to read-only commands (ls, find, grep, cat, stat, wc, head, tail). Denied (terracotta): write-capable Bash and all other tools are blocked entirely. This same permission sandbox is shared between T3 extraction and T4 dream consolidation agents.
+How to read this diagram. The three subgroups represent three permission tiers, arranged from most permissive (top) to most restrictive (bottom). The “Unrestricted” group grants full read-only access to Read, Grep, and Glob. The “Scoped” group allows Edit, Write, and Bash only within narrow bounds – the memory directory for Edit/Write, and read-only commands for Bash. The “Denied” group blocks write-capable Bash and all other tools entirely. This same three-tier sandbox applies to both T3 extraction and T4 dream consolidation agents.
+The permission function (<beginning of the code>createAutoMemCanUseTool<end of the code>) is shared between T3 extraction and T4 dream consolidation. Read/Grep/Glob are unrestricted (inherently read-only). Bash is allowed only when <beginning of the code>tool.isReadOnly(parsed.data)<end of the code> returns true – limiting it to commands like <beginning of the code>ls<end of the code> , <beginning of the code>find<end of the code> , <beginning of the code>grep<end of the code> , <beginning of the code>cat<end of the code>, <beginning of the code>stat<end of the code> , <beginning of the code>wc<end of the code> , <beginning of the code>head<end of the code> , <beginning of the code>tail<end of the code>. Edit and Write are allowed only when the target <beginning of the code>file_path<end of the code> passes <beginning of the code>isAutoMemPath()<end of the code>, which verifies (after normalization) that the path starts with the auto-memory directory prefix.
+Mutual Exclusion with the Main Agent
+A subtle but important design choice: when the main agent writes memories directly (because the user explicitly said “remember this”), the extraction agent skips that range entirely. The <beginning of the code>hasMemoryWritesSince<end of the code> function scans assistant messages after the cursor for Edit/Write tool-use blocks targeting auto-memory paths. If found, the extraction cursor advances past those messages without spawning a forked agent. This prevents duplicate memories and wasted API calls.
+Coalescing and Trailing Runs
+If a new extraction...
+</snippet><url>https://y-agent.github.io/inside-claude-code/17-memory-hierarchy.html</url><last_update_time>2026年5月13日8时36分</last_update_time><text_length>2905</text_length></document><document reference_id="https://claude.yourdocs.dev/docs/claude-code/memory"><title>Claude Code Memory</title><host>claude.yourdocs.dev</host><snippet>Claude Code Memory
+Updated 3 days ago
+Claude Code can remember your preferences across sessions, like style guidelines and common commands in your workflow.
+Determine memory type
+Claude Code offers four memory locations in a hierarchical structure, each serving a different purpose:| Memory Type | Location | Purpose | Use Case Examples | Shared With |
+| --- | --- | --- | --- | --- |
+| Enterprise policy | macOS: /Library/Application Support/ClaudeCode/CLAUDE.md Linux: /etc/claude-code/CLAUDE.md Windows: C:\ProgramData\ClaudeCode\CLAUDE.md | Organization-wide instructions managed by IT/DevOps | Company coding standards, security policies, compliance requirements | All users in organization |
+| Project memory | ./CLAUDE.md or ./.claude/CLAUDE.md | Team-shared instructions for the project | Project architecture, coding standards, common workflows | Team members via source control |
+| User memory | ~/.claude/CLAUDE.md | Personal preferences for all projects | Code styling preferences, personal tooling shortcuts | Just you (all projects) |
+| Project memory (local) | ./CLAUDE.local.md | Personal project-specific preferences | (Deprecated, see below) Your sandbox URLs, preferred test data | Just you (current project) |
+
+All memory files are automatically loaded into Claude Code's context when launched. Files higher in the hierarchy take precedence and are loaded first, providing a foundation that more specific memories build upon.
+CLAUDE.md imports
+CLAUDE.md files can import additional files using <beginning of the code>@path/to/import<end of the code> syntax. The following example imports 3 files:
+<beginning of the code>
+See @README for project overview and @package.json for available npm commands for this project.
+
+# Additional Instructions
+- git workflow @docs/git-instructions.md
+<end of the code>
+Both relative and absolute paths are allowed. In particular, importing files in user's home dir is a convenient way for your team members to provide individual instructions that are not checked into the repository. Previously CLAUDE.local.md served a similar purpose, but is now deprecated in favor of imports since they work better across multiple git worktrees.
+<beginning of the code>
+# Individual Preferences
+- @~/.claude/my-project-instructions.md
+<end of the code>
+To avoid potential collisions, imports are not evaluated inside markdown code spans and code blocks.
+<beginning of the code>
+This code span will not be treated as an import: `@anthropic-ai/claude-code`
+<end of the code>
+Imported files can recursively import additional files, with a max-depth of 5 hops. You can see what memory files are loaded by running <beginning of the code>/memory<end of the code> command.
+How Claude looks up memories
+Claude Code reads memories recursively: starting in the cwd, Claude Code recurses up to (but not including) the root directory / and reads any CLAUDE.md or CLAUDE.local.md files it finds. This is especially convenient when working in large repositories where you run Claude Code in foo/bar/, and have memories in both foo/CLAUDE.md and foo/bar/CLAUDE.md.
+Claude will also discover CLAUDE.md nested in subtrees under your current working directory. Instead of loading them at launch, they are only included when Claude reads files in those subtrees.
+Quickly add memories with the <beginning of the code>#<end of the code> shortcut
+The fastest way to add a memory is to start your input with the <beginning of the code>#<end of the code> character:
+<beginning of the code>
+# Always use descriptive variable names
+<end of the code>
+You'll be prompted to select which memory file to store this in.
+Directly edit memories with <beginning of the code>/memory<end of the code>
+Use the <beginning of the code>/memory<end of the code> slash command during a session to open any memory file in your system editor for more extensive additions or organization.
+Set up project memory
+Suppose you want to set up a CLAUDE.md file to store important project information, conventions, and frequently used commands. Project memory can be stored in either <beginning of the code>./CLAUDE.md<end of the code> or <beginning of the code>./.claude/CLAUDE.md<end of the code>.
+Bootstrap a CLAUDE.md for your codebase with the following command:
+<beginning of the code>
+> /init 
+<end of the code>
+Tip: Tips:
+Include frequently used commands (build, test, lint) to avoid repeated searches
+Document code style preferences and naming conventions
+Add important architectural patterns specific to your project
+CLAUDE.md memories can be used for both instructions shared with your team and for your individual preferences.
+Organization-level memory management
+Enterprise organizations can deploy centrally managed CLAUDE.md files that apply to all users.
+To set up organization-level memory management:
+Create the enterprise memory file in the appropriate location for your operating system:
+macOS: <beginning of the code>/Library/Application Support/ClaudeCode/CLAUDE.md<end of the code>
+Linux/WSL: <beginning of the code>/etc/claude-code/CLAUDE.md<end of the code>
+Windows: <beginning of the code>C:\ProgramData\ClaudeCode\CLAUDE.md<end of the code>
+Deploy via your configuration management system (MDM, Group Policy, Ansible, etc.) to ensure consistent distribution across all developer machines.
+Memory best practices
+Be specific: "Use 2-space indentation" is better than "Format code properly".
+Use structure to organize: Format each individual memory as a bullet point and group related memories under descriptive markdown headings.
+Review periodically: Update memories as your project evolves to ensure Claude is always using the most up to date information and context.</snippet><url>https://claude.yourdocs.dev/docs/claude-code/memory</url><publish_time>2026年9月12日20时6分</publish_time><text_length>1492</text_length></document></search>

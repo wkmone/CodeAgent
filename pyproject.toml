@@ -1,0 +1,23 @@
+[project]
+name = "codeagent"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "callable>=0.1.2",
+    "httpx>=0.28.1",
+    "pillow>=12.3.0",
+    "prompt-toolkit>=3.0.53",
+    "rich>=15.0.0",
+    "typer>=0.27.2",
+    "usage>=0.0.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codecli"]
+
+[project.scripts]
+codecli = "codecli.entry.cli:app"

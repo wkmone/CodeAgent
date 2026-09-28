@@ -1,0 +1,917 @@
+<search query="OpenAI Codex AGENTS.md memory codex_cli auto memory feature" search_time="2026年9月21日11时1分星期一"><document reference_id=""><title>Desfășurarea buclei agentului Codex</title><snippet>Codex CLI
+este agentul nostru software local pentru toate platformele, conceput pentru a produce modificări de software fiabile și de înaltă calitate, funcționând în siguranță și eficient pe computerul tău. Am învățat foarte multe despre cum să construim un agent software de talie mondială de când am lansat inițial CLI în aprilie ⁠ . Pentru a detalia aceste perspective, aceasta este prima postare dintr-o serie continuă în care vom explora diverse aspecte ale modului în care funcționează Codex, precum și lecții învățate din greșeli. (Pentru o perspectivă și mai detaliată asupra modului în care este construit Codex CLI, consultă depozitul nostru open-source la
+https://github.com/openai/codex
+Pentru început, ne vom concentra asupra buclei agentului, care este logica de bază din Codex CLI, responsabilă de orchestrarea interacțiunii dintre utilizator, model și instrumentele pe care modelul le invocă pentru a efectua activități software semnificative. Sperăm că această postare îți va oferi o imagine clară asupra rolului pe care agentul nostru (sistemul nostru) îl deține în utilizarea unui LLM.
+Înainte de a intra în detalii, o scurtă observație despre terminologie: la OpenAI, „Codex” cuprinde o suită de oferte de agenți software, inclusiv Codex CLI, Codex Cloud și extensia Codex VS Code. Această postare se concentrează pe sistemul Codex, care furnizează bucla de bază a agentului și logica de execuție ale tuturor experiențelor Codex și care sunt afișate prin Codex CLI. Pentru ușurință, vom folosi termenii „Codex” și „Codex CLI” interschimbabil.
+Bucla agentului
+În centrul fiecărui agent de inteligență artificială se află ceva numit „bucla agentului”. O ilustrație simplificată a buclei agentului arată astfel:
+Diagramă intitulată „Bucla agentului” care ilustrează modul în care un sistem de inteligență artificială procesează o solicitare a utilizatorului, apelează instrumente, observă rezultatele, își actualizează planul și returnează ieșiri. Săgețile conectează pași precum intrarea utilizatorului, raționamentul modelului, acțiunile instrumentului și răspunsul final.
+Pentru început, agentul preia date de intrare de la utilizator pentru a le include în setul de instrucțiuni textuale pe care le pregătește pentru model, cunoscut sub numele de solicitare.
+Următorul pas este să interogăm modelul trimițându-i instrucțiunile noastre și solicitându-i să genereze un răspuns, un proces cunoscut sub numele de inferență. În timpul inferenței, solicitarea textuală este mai întâi transformată într-o secvență de
+Conținutul fișierelor <beginning of the code>AGENTS.override.md<end of the code> și <beginning of the code>AGENTS.md<end of the code> din <beginning of the code>$CODEX_HOME<end of the code>
+Sub rezerva unei limite (32 KiB, implicit), caută în fiecare folder de la rădăcina Git/proiect a <beginning of the code>cwd<end of the code> (dacă există) până la <beginning of the code>cwd<end of the code> însuși: adaugă conținutul oricăruia dintre <beginning of the code>AGENTS.override.md<end of the code>, <beginning of the code>AGENTS.md<end of the code> sau orice nume de fișier specificat de <beginning of the code>project_doc_fallback_filenames în config.toml<end of the code>
+Să presupunem că prima solicitare către API-ul Responses include două evenimente <beginning of the code>response.output_item.done<end of the code>: unul cu <beginning of the code>type=reasoning<end of the code> și unul cu <beginning of the code>type=function_call<end of the code>. Aceste evenimente trebuie să fie reprezentate în câmpul <beginning of the code>intrare<end of the code> al JSON-ului atunci când interogăm din nou modelul cu răspunsul la apelarea de instrument:
+Solicitarea rezultată folosită pentru a eșantiona modelul ca parte a interogării ulterioare ar arăta astfel:
+De remarcat cum vechea solicitare este un prefix exact al noii solicitări. Acest lucru este intenționat, deoarece face ca solicitările ulterioare să fie mult mai eficiente, deoarece ne permite să profităm de memorarea în cache a solicitărilor (pe care o vom discuta în secțiunea următoare despre performanță).
+Revenind la prima noastră diagramă a buclei agentului, observăm că ar putea exista multe iterații între inferență și apelarea de instrumente. Solicitarea poate continua să crească până când primim în cele din urmă un mesaj al asistentului, indicând sfârșitul rândului:
+data: {"type":"response.completed","response":{...}}
+În Codex CLI, îi prezentăm utilizatorului mesajul asistentului și focalizăm compozitorul pentru a-i indica utilizatorului că este „rândul” său să continue conversația. Dacă utilizatorul răspunde, atât mesajul asistentului din runda anterioară, cât și noul mesaj al utilizatorului trebuie să fie adăugate la <beginning of the code>intrare<end of the code> în cererea API-ului Responses pentru a începe noul rând:
+Din nou, deoarece continuăm o conversație, lungimea <beginning of the code>intrării<end of the code> pe care o trimitem către API-ul Responses continuă să crească:
+Să vedem ce înseamnă această solicitare în continuă creștere pentru performanță.
+Considerații privind performanța
+S-ar putea să te întrebi: „Stai puțin, bucla agentului nu este cvadratică în ceea ce privește cantitatea de JSON trimisă către API-ul Responses pe parcursul conversației?” Și ai avea dreptate. Deși API-ul Responses acceptă un parametru opțional
+<beginning of the code>previous_response_id<end of the code>
+pentru a atenua această problemă, Codex nu-l folosește în prezent, în principal pentru a menține solicitările complet fără stare și pentru a susține configurațiile de Zero date păstrate (ZDR).
+Evitarea <beginning of the code>previous_response_id<end of the code> simplifică lucrurile pentru furnizorul API-ului Responses, deoarece asigură că fiecare cerere este fără stare. Acest lucru simplifică și compatibilitatea cu clienții care au optat pentru
+Zero date păstrate (ZDR)
+ deoarece stocarea datelor necesare pentru a accepta <beginning of the code>previous_response_id<end of the code> ar fi incompatibilă cu ZDR. Reține că utilizatorii ZDR nu pierd capacitatea de a beneficia de mesajele de raţionament proprietare din rândurile anterioare, deoarece <beginning of the code>encrypted_content<end of the code> asociat poate fi decriptat pe server. (OpenAI păstrează cheia de decriptare a unui client ZDR, dar nu și datele sale.) Vezi cererile de extragere
+#642
+#1641
+pentru modificările asociate aduse la Codex pentru a accepta ZDR.
+În general, costul eșantionării modelului depășește costul traficului de rețea, ceea ce face ca eșantionarea să fie ținta principală a eforturilor noastre de eficiență. De aceea memorarea în cache a solicitărilor este atât de importantă, deoarece ne permite să reutilizăm calculul dintr-o apelare de inferență anterioară. Când obținem rezultate din memoria cache, eșantionarea modelului este liniară, nu pătratică. Documentația noastră
+despre memorarea în cache a solicitărilor
+explică acest lucru în detaliu:
+Rezultatele din memoria cache sunt posibile numai pentru potriviri exacte ale prefixului din cadrul unei solicitări. Pentru a beneficia de avantajele memorării în cache, pune conținutul static, cum ar fi instrucțiunile și exemplele, la începutul solicitării și pune conținutul variabil, cum ar fi informațiile specifice utilizatorului, la final. Acest lucru se aplică și imaginilor și instrumentelor, care trebuie să fie identice între cereri.
+Având în vedere acest lucru, să analizăm ce tipuri de operațiuni ar putea cauza o „eroare de cache” în Codex:
+Schimbarea <beginning of the code>instrumentelor<end of the code> disponibile pentru model în mijlocul conversației.
+Schimbarea <beginning of the code>modelului<end of the code> care este ținta cererii API-ului Responses (în practică, acest lucru schimbă al treilea element din solicitarea originală, deoarece conține instrucțiuni specifice modelului).
+Schimbarea configurației sandbox, a modului de aprobare sau a directorului de lucru curent.
+Echipa Codex trebuie să fie atentă când introduce funcționalități noi în CLI Codex care ar putea compromite memorarea în cache a solicitărilor. De exemplu, compatibilitatea noastră inițială cu instrumentele MCP a introdus un
+bug din cauza căruia nu am reușit să enumerăm instrumentele într-o ordine consecventă
+, cauzând erori de cache. Reține că instrumentele MCP pot fi deosebit de complicate, deoarece serverele MCP pot modifica din mers lista de instrumente pe care le oferă printr-o notificare
+<beginning of the code>notifications/tools/list_changed<end of the code>
+. Onorarea acestei notificări în mijlocul unei conversații lungi poate cauza o eroare de cache costisitoare.
+Când este posibil, gestionăm modificările de configurație care au loc în timpul conversației prin adăugarea unui mesaj nou la <beginning of the code>intrare<end of the code> pentru a reflecta modificarea, în loc să modificăm un mesaj anterior:
+Dacă se schimbă configurația sandboxului sau modul de aprobare,
+inserăm
+un nou mesaj <beginning of the code>role=developer<end of the code> cu același format ca și elementul original <beginning of the code><permissions instructions><end of the code>.
+Dacă directorul de lucru curent se schimbă,
+inserăm
+un nou mesaj <beginning of the code>role=user<end of the code> cu același format ca cel al <beginning of the code><environment_context><end of the code> original.
+Depunem eforturi considerabile pentru a asigura accesări ale memoriei cache pentru performanță. Există o altă resursă cheie pe care trebuie să o gestionăm: fereastra contextuală.
+Strategia noastră generală pentru a evita epuizarea ferestrei contextuale este de a compacta conversația odată ce numărul de tokenuri depășește un anumit prag. Mai exact, înlocuim <beginning of the code>intrarea<end of the code> cu o listă nouă, mai mică, de elemente care este reprezentativă pentru conversație, permițându-i agentului să continue înțelegând ceea ce s-a întâmplat până acum. O
+implementare timpurie a compactării
+necesita ca utilizatorul să invoce manual comanda <beginning of the code>/compact<end of the code> , care interoga API-ul Responses folosind conversația existentă, plus instrucțiuni personalizate pentru
+rezumare
+. Codex a folosit mesajul rezultat al asistentului, care conținea rezumatul
+ca noua <beginning of the code>intrare<end of the code>
+pentru rândurile ulterioare ale conversației.
+De atunci, API-ul Responses a evoluat, acceptând un punct final special
+<beginning of the code>/responses/compact<end of the code>
+care efectuează compactarea mai eficient. Returnează
+o listă de elemente
+care pot fi utilizate în locul <beginning of the code>intrării<end of...
+</snippet><publish_time>2026年1月23日0时0分</publish_time><text_length>2901</text_length></document><document reference_id=""><title>Unrolling the Codex agent loop</title><snippet>is our cross-platform local software agent, designed to produce high-quality, reliable software changes while operating safely and efficiently on your machine. We’ve learned a tremendous amount about how to build a world-class software agent since we first launched the CLI in April ⁠ . To kick off, we’ll focus on the agent loop, which is the core logic in Codex CLI that is responsible for orchestrating the interaction between the user, the model, and the tools the model invokes to perform meaningful software work. Before we dive in, a quick note on terminology: at OpenAI, “Codex” encompasses a suite of software agent offerings, including Codex CLI, Codex Cloud, and the Codex VS Code extension. This post focuses on the Codex harness, which provides the core agent loop and execution logic that underlies all Codex experiences and is surfaced through the Codex CLI. For ease here, we’ll use the terms “Codex” and “Codex CLI” interchangeably.
+At the heart of every AI agent is something called “the agent loop.” A simplified illustration of the agent loop looks like this:To start, the agent takes input from the user to include in the set of textual instructions it prepares for the model known as a prompt .
+The next step is to query the model by sending it our instructions and asking it to generate a response, a process known as inference. During inference, the textual prompt is first translated into a sequence of input
+tokens
+As the result of the inference step, the model either (1) produces a final response to the user’s original input, or (2) requests a tool call that the agent is expected to perform (e.g. In the case of (2), the agent executes the tool call and appends its output to the original prompt. This output is used to generate a new input that’s used to re-query the model; the agent can then take this new information into account and try again.
+This process repeats until the model stops emitting tool calls and instead produces a message for the user (...
+Because the agent can execute tool calls that modify the local environment, its “output” is not limited to the assistant message. Every time you send a new message to an existing conversation, the conversation history is included as part of the prompt for the new turn, which includes the messages and tool calls from previous turns:This means that as the conversation grows, so does the length of the prompt used to sample the model. This length matters because every model has a context window, which is the maximum number of tokens it can use for one inference call. Note this window includes both input and output tokens. As you might imagine, an agent could decide to make hundreds of tool calls in a single turn, potentially exhausting the context window. For this reason, context window management is one of the agent’s many responsibilities. Contents of <beginning of the code>AGENTS.override.md<end of the code> and <beginning of the code>AGENTS.md<end of the code> in <beginning of the code>$CODEX_HOME<end of the code>
+Subject to a limit (32 KiB, by default), look in each folder from the Git/project root of the <beginning of the code>cwd<end of the code> (if it it exists) up to the <beginning of the code>cwd<end of the code> itself: add the contents of any of <beginning of the code>AGENTS.override.md<end of the code>, <beginning of the code>AGENTS.md<end of the code>, or any filename specified by <beginning of the code>project_doc_fallback_filenames in config.toml<end of the code>
+a short preamble about skills
+skill metadata
+"text": "**Adding an architecture diagram for README."type": "function_call",
+"name": "shell",
+"arguments": "{\"command\":\"cat README.md\",\"workdir\":\"/Users/mbolin/code/codex5\"}",
+"output": "<p align=\"center\"><code>npm i -g @openai/codex</code>..."
+La indicació resultant utilitzada per mostrejar el model com a part de la consulta posterior tindria aquest aspecte:En particular, observeu com l'antiga indicació és un prefix exacte de la nova indicació. Això és intencionat, ja que fa que les sol·licituds posteriors siguin molt més eficients perquè ens permet aprofitar la memòria cau d'indicacions (que comentarem a la secció següent sobre rendiment).Tornant al nostre primer diagrama del bucle de l'agent, veiem que hi podria haver moltes iteracions entre la inferència i la crida d'eines. La indicació pot continuar creixent fins que finalment rebem un missatge d'assistent, que indica el final del torn:
+A Codex CLI, presentem el missatge d'assistent a l'usuari i enfoquem el compositor per indicar a l'usuari que ara és el seu «torn» de continuar la conversa. Si l'usuari respon, tant el missatge d'assistent del torn anterior com el nou missatge de l'usuari s'han d'afegir a <beginning of the code>input<end of the code> de la sol·licitud a l'API Responses per iniciar el nou torn:
+Un altre cop, com que continuem una conversa, la longitud d'<beginning of the code>input<end of the code> que enviem a l'API Responses continua augmentant:Examinem què significa aquesta indicació que no para de créixer per al rendiment.
+Consideracions de rendiment
+Potser us esteu preguntant: «Espera, el bucle de l'agent no és quadràtic pel que fa a la quantitat de JSON enviada a l'API Responses al llarg de la conversa?» I tindríeu raó. Tot i que l'API Responses sí que admet un paràmetre opcional
+<beginning of the code>previous_response_id<end of the code>
+per mitigar aquest problema, Codex no el fa servir avui dia, principalment per mantenir les sol·licituds completament sense estat i per admetre configuracions de retenció de dades nul·la (ZDR).
+Evitar <beginning of the code>previous_response_id<end of the code> simplifica les coses per al proveïdor de l'API Responses perquè garanteix que cada sol·licitud és sense estat. Això també fa que sigui senzill donar suport als clients que han optat per la
+retenció de dades nul·la (ZDR)
+, ja que emmagatzemar les dades necessàries per donar suport a <beginning of the code>previous_response_id<end of the code> aniria en contra de la ZDR. Tingueu en compte que els clients ZDR no renuncien a la possibilitat de beneficiar-se dels missatges de raonament propietaris de torns anteriors, ja que l'<beginning of the code>encrypted_content<end of the code> associat es pot desxifrar al servidor. (OpenAI conserva la clau de desxifrat d'un client ZDR, però no les seves dades.) Vegeu les PR
+En general, el cost de mostrejar el model domina el cost del trànsit de xarxa, cosa que fa que el mostreig sigui l'objectiu principal dels nostres esforços d'eficiència. Per això la memòria cau d'indicacions és tan important, ja que ens permet reutilitzar càlcul d'una crida d'inferència anterior. Quan obtenim encerts de memòria cau, mostrejar el model és lineal en lloc de quadràtic. La nostra documentació sobre
+memòria cau d'indicacions
+ho explica amb més detall:
+Els encerts de memòria cau només són possibles per a coincidències exactes de prefix dins d'una indicació. Per obtenir els beneficis de la memòria cau, col·loqueu contingut estàtic com instruccions i exemples al principi de la indicació, i poseu el contingut variable, com ara informació específica de l'usuari, al final. Això també s'aplica a les imatges i eines, que han de ser idèntiques entre sol·licituds.
+Amb això present, considerem quins tipus d'operacions podrien causar un «error de memòria cau» a Codex:
+Canviar les <beginning of the code>tools<end of the code> disponibles per al model al mig de la conversa.
+Canviar el <beginning of the code>model<end of the code> objectiu de la sol·licitud a l'API Responses (a la pràctica, això canvia el tercer element de la indicació original, ja que conté instruccions específiques del model).
+Canviar la configuració del sandbox, el mode d'aprovació o el directori de treball actual.
+L'equip de Codex ha de ser diligent en introduir noves funcionalitats a Codex CLI que puguin comprometre la memòria cau d'indicacions. Com a exemple, el nostre suport inicial per a eines MCP va introduir un
+error en què no enumeràvem les eines en un ordre coherent
+, cosa que provocava errors de memòria cau. Tingueu en compte que les eines MCP poden ser especialment complicades perquè els servidors MCP poden canviar sobre la marxa la llista d'eines que proporcionen mitjançant una notificació
+<beginning of the code>notifications/tools/list_changed<end of the code>
+. Respectar aquesta notificació al mig d'una conversa llarga pot provocar un costós error de memòria cau.
+Quan és possible, gestionem els canvis de configuració que passen a mitja conversa afegint un missatge nou a <beginning of the code>input<end of the code> per reflectir el canvi en lloc de modificar un missatge anterior:
+Si canvien la configuració del sandbox o el mode d'aprovació,
+inserim
+un missatge nou <beginning of the code>role=developer<end of the code> amb el mateix format que l'element original <beginning of the code><permissions instructions><end of the code>.
+Si canvia el directori de treball actual,
+inserim
+un missatge nou <beginning of the code>role=user<end of the code> amb el mateix format que l'original <beginning of the code><environment_context><end of the code>.
+Fem grans esforços per garantir encerts de memòria cau per al rendiment. Hi ha un altre recurs clau que hem de gestionar: la finestra de context.
+La nostra estratègia general per evitar quedar-nos sense finestra de context és compactar la conversa un cop el nombre de segments supera un cert llindar. En concret, substituïm <beginning of the code>input<end of the code> per una llista nova i més petita d'elements que representa la conversa, cosa que permet a l'agent continuar entenent què ha passat fins aleshores. Una
+implementació inicial de la compactació
+exigia que l'usuari invoqués manualment l'ordre <beginning of the code>/compact<end of the code>, que consultava l'API Responses fent servir la conversa existent més instruccions personalitzades per a la
+resumització
+. Codex feia servir el missatge d'assistent resultant amb el resum
+com a nou <beginning of the code>input<end of the code>
+per als torns de conversa posteriors.
+Des de llavors, l'API Responses ha evolucionat per admetre un
+<beginning of the code>punt final /responses/compact<end of the code>
+especial que fa la compactació de manera més eficient. Retorna
+una llista d'elements
+que es poden fer servir en lloc de l'<beginning of the code>input<end of the code> anterior per continuar la conversa mentre s'allibera la finestra de context. Aquesta llista inclou un element especial <beginning of the code>type=compaction<end of the code> amb un element opac <beginning of the code>encrypted_content<end of the code> que preserva la comprensió latent que té el model de la conversa original. Ara, Codex fa servir automàticament aquest punt final per compactar la conversa quan se supera l'
+<beginning of the code>auto_compact_limit<end of the code>
+.
+Pròximament
+Hem presentat el bucle de l'agent Codex i hem recorregut com Codex crea i gestiona el seu context quan consulta un model. Durant el recorregut, hem destacat consideracions pràctiques i bones pràctiques que s'apliquen a qualsevol persona que construeixi un bucle d'agent sobre l'API Responses.
+Tot i que el bucle de l'agent proporciona la base de Codex, això només és el començament. En articles pròxims, aprofundirem en l'arquitectura de la CLI, explorarem com s'implementa l'ús d'eines i examinarem més de prop el model de sandboxing de Codex.
+2026
+</snippet><publish_time>2026年1月23日0时0分</publish_time><text_length>2566</text_length></document><document reference_id="https://openai.com/index/introducing-codex/?_bhlid=e84110748878a276c02efa492f172b7ba21816d3"><title>Introducing Codex | OpenAI</title><host>OpenAI</host><snippet>Introducing Codex
+A cloud-based software engineering agent that can work on many tasks in parallel, powered by codex-1. Available to ChatGPT Pro, Business, and Enterprise users today, and Plus users soon.
+Building safe and trustworthy agents
+Aligning to human preferences
+Preventing abuse
+Updates to Codex CLI
+How Codex works
+Building safe and trustworthy agents
+Preventing abuse
+Secure execution
+Updates to Codex CLI
+Update on June 3, 2025: Codex is now available to ChatGPT Plus users. We’re also enabling users to provide Codex with internet access during task execution. Today we’re launching a research preview of Codex: a cloud-based software engineering agent that can work on many tasks in parallel. Codex can perform tasks for you such as writing features, answering questions about your codebase, fixing bugs, and proposing pull requests for review; each task runs in its own cloud sandbox environment, preloaded with your repository.
+Codex is powered by codex-1, a version of OpenAI o3 optimized for software engineering. It was trained using reinforcement learning on real-world coding tasks in a variety of environments to generate code that closely mirrors human style and PR preferences, adheres precisely to instructions, and can iteratively run tests until it receives a passing result. We’re starting to roll out Codex to ChatGPT Pro, Enterprise, and Business users today, with support for Plus and Edu coming soon.
+ChatGPT Work
+How Codex works
+Today you can access Codex through the sidebar in ChatGPT and assign it new coding tasks by typing a prompt and clicking “Code”. If you want to ask Codex a question about your codebase, click “Ask”. Each task is processed independently in a separate, isolated environment preloaded with your codebase. Codex can read and edit files, as well as run commands including test harnesses, linters, and type checkers. Task completion typically takes between 1 and 30 minutes, depending on complexity, and you can monitor Codex’s progress in real time.
+Once Codex completes a task, it commits its changes in its environment. Codex provides verifiable evidence of its actions through citations of terminal logs and test outputs, allowing you to trace each step taken during task completion. You can then review the results, request further revisions, open a GitHub pull request, or directly integrate the changes into your local environment. In the product, you can configure the Codex environment to match your real development environment as closely as possible.
+Codex can be guided by AGENTS.md files placed within your repository. These are text files, akin to README.md, where you can inform Codex how to navigate your codebase, which commands to run for testing, and how best to adhere to your project's standard practices. Like human developers, Codex agents perform best when provided with configured dev environments, reliable testing setups, and clear documentation.
+On coding evaluations and internal benchmarks, codex-1 shows strong performance even without AGENTS.md files or custom scaffolding.
+23 SWE-Bench Verified samples that were not runnable on our internal infrastructure were excluded. codex-1 was tested at a maximum context length of 192k tokens and medium ‘reasoning effort’, which is the setting that will be available in product today. We’re releasing Codex as a research preview, in line with our iterative deployment strategy. We prioritized security and transparency when designing Codex so users can verify its outputs - a safeguard that grows increasingly more important as AI models handle more complex coding tasks independently and safety considerations evolve. Users can check Codex’s work through citations, terminal logs and test results. To balance safety and utility, Codex was trained to identify and precisely refuse requests aimed at development of malicious software, while clearly distinguishing and supporting legitimate tasks. The Codex agent operates entirely within a secure, isolated container in the cloud. During task execution, internet access is disabled, limiting the agent’s interaction solely to the code explicitly provided via GitHub repositories and pre-installed dependencies configured by the user via a setup script. The agent cannot access external websites, APIs, or other services. Technical teams at OpenAI have started using Codex as part of their daily toolkit. It is most often used by OpenAI engineers to offload repetitive, well-scoped tasks, like refactoring, renaming, and writing tests, that would otherwise break focus. It’s equally useful for scaffolding new features, wiring components, fixing bugs, and drafting documentation. Teams are building new habits around it: triaging on-call issues, planning tasks at the start of the day, and offloading background work to keep moving. By reducing context-switching and surfacing forgotten to-dos, Codex helps engineers ship faster and stay focused on what matters most.
+is exploring how Codex can help their engineering teams bring ambitious ideas to life faster. Temporal
+uses Codex to accelerate feature development, debug issues, write and execute tests, and refactor large codebases. It also helps them stay focused by running complex tasks in the background—keeping engineers in flow while speeding up iteration.
+Superhuman
+uses Codex to speed up small but repetitive tasks like improving test coverage and fixing integration failures. It also helps them ship faster by enabling product managers to contribute lightweight code changes without pulling in an engineer, except for code review.
+Kodiak
+is using Codex to help write debugging tools, improve test coverage, and refactor code—accelerating development of the Kodiak Driver, their autonomous driving technology. Codex has also become a valuable reference tool, helping engineers understand unfamiliar parts of the stack by surfacing relevant context and past changes.
+Based on learnings from early testers, we recommend assigning well-scoped tasks to multiple agents simultaneously, and experimenting with different types of tasks and prompts to explore the model’s capabilities effectively.
+Updates to Codex CLI
+Last month, we launched Codex CLI, a lightweight open-source coding agent that runs in your terminal. It brings the power of models like o3 and o4-mini into your local workflow, making it easy to pair with them to complete tasks faster.
+Today, we’re also releasing a smaller version of codex-1, a version of o4-mini designed specifically for use in Codex CLI. This new model supports faster workflows in the CLI and is optimized for low-latency code Q&A and editing, while retaining the same strengths in instruction following and style. It’s available now as the default model in Codex CLI and in the API as codex-mini-latest. The underlying snapshot will be regularly updated as we continue to improve the Codex-mini model.
+We’re also making it much easier to connect your developer account to Codex CLI. Instead of manually generating and configuring an API token, you can now sign in with your ChatGPT account and select the API organization you want to use. We’ll automatically generate and configure the API key for you. Plus and Pro users who sign in to Codex CLI with ChatGPT can also begin redeeming $5 and $50 in free API credits, respectively, later today for the next 30 days.
+Codex availability, pricing, and limitations
+Starting today, we’re rolling out Codex to ChatGPT Pro, Enterprise, and Business users globally, with support for Plus and Edu coming soon. Users will have generous access at no additional cost for the coming weeks so you can explore what Codex can do, after which we’ll roll out rate-limited access and flexible pricing options that let you purchase additional usage on-demand. We plan to expand access to Plus and Edu users soon.
+For developers building with codex-mini-latest, the model is available on the Responses API and priced at $1.50 per 1M input tokens and $6 per 1M output tokens, with a 75% prompt caching discount.
+Codex is still early in its development. As a research preview, it currently lacks features like image inputs for frontend work, and the ability to course-correct the agent while it’s working. Additionally, delegating to a remote agent takes longer than interactive editing, which can take some getting used to. Over time, interacting with Codex agents will increasingly resemble asynchronous collaboration with colleagues. As model capabilities advance, we anticipate agents handling more complex tasks over extended periods.
+What’s next
+We imagine a future where developers drive the work they want to own and delegate the rest to agents—moving faster and being more productive with AI. To achieve that, we’re building a suite of Codex tools that support both real-time collaboration and asynchronous delegation.
+Pairing with AI tools like Codex CLI and others has quickly become an industry norm, helping developers move faster as they code. But we believe the asynchronous, multi-agent workflow introduced by Codex in ChatGPT will become the de facto way engineers produce high-quality code.
+Ultimately, we see these two modes of interaction—real-time pairing and task delegation—converging. Developers will collaborate with AI agents across their IDEs and everyday tools to ask questions, get suggestions, and offload longer tasks, all in a unified workflow.
+Looking ahead, we plan to introduce more interactive and flexible agent workflows. Developers will soon be able to provide guidance mid-task, collaborate on implementation strategies, and receive proactive progress updates. We also envision deeper integrations across the tools you already use: today Codex connects with GitHub, and soon you’ll be able to assign tasks from Codex CLI, ChatGPT Desktop, or even tools such as your issue tracker or CI system.
+While we’re optimistic about these gains, we’re also collaborating with partners to better understand the implications of widespread agent adoption on developer workflows, skill development across people, skill levels, and ge...
+Appendix
+System message
+We are sharing the codex-1 system message to help developers understand the model’s default behavior and tailor Codex to work effectively in custom workflows. For example, the codex-1 system message encourages Codex to run all tests mentioned in the AGENTS.md file, but if you’re short on time, you can ask Codex to skip these tests.
+1
+# Instructions
+2
+- The user will provide a task.
+3
+- The task involves working with Git repositories in your current working directory.
+4
+- Wait for all terminal commands to be completed (or terminate them) before finishing.
+5
+6
+# Git instructions
+7
+If completing the user's task requires writing or modifying files:
+8
+- Do not create new branches.
+9
+- Use git to commit your changes.
+10
+- If pre-commit fails, fix issues and retry.
+11
+- Check git status to confirm your commit. You must leave your worktree in a clean state.
+12
+- Only committed code will be evaluated.
+13
+- Do not modify or amend existing commits.
+14
+15
+# AGENTS.md spec
+16
+- Containers often contain AGENTS.md files. These files can appear anywhere in the container's filesystem. Typical locations include `/`, `~`, and in various places inside of Git repos.
+17
+- These files are a way for humans to give you (the agent) instructions or tips for working within the container.
+18
+- Some examples might be: coding conventions, info about how code is organized, or instructions for how to run or test code.
+19
+- AGENTS.md files may provide instructions about PR messages (messages attached to a GitHub Pull Request produced by the agent, describing the PR). These instructions should be respected.
+20
+- Instructions in AGENTS.md files:
+21
+- The scope of an AGENTS.md file is the entire directory tree rooted at the folder that contains it.
+22
+- For every file you touch in the final patch, you must obey instructions in any AGENTS.md file whose scope includes that file.
+23
+- Instructions about code style, structure, naming, etc. apply only to code within the AGENTS.md file's scope, unless the file states otherwise.
+24
+- More-deeply-nested AGENTS.md files take precedence in the case of conflicting instructions.
+25
+- Direct system/developer/user instructions (as part of a prompt) take precedence over AGENTS.md instructions.
+26
+- AGENTS.md files need not live only in Git repos. For example, you may find one in your home directory.
+27
+- If the AGENTS.md includes programmatic checks to verify your work, you MUST run all of them and make a best effort to validate that the checks pass AFTER all code changes have been made.
+28
+- This applies even for changes that appear simple, i.e. documentation. You still must run all of the programmatic checks.
+29
+30
+# Citations instructions
+31
+- If you browsed files or used terminal commands, you must add citations to the final response (not the body of the PR message) where relevant. Citations reference file paths and terminal outputs with the following formats:
+32
+1) `【F:<file_path>†L<line_start>(-L<line_end>)?】`
+33
+- File path citations must start with `F:`. `file_path` is the exact file path of the file relative to the root of the repository that contains the relevant text.
+34
+- `line_start` is the 1-indexed start line number of the relevant output within that file.
+35
+2) `【<chunk_id>†L<line_start>(-L<line_end>)?- Where `chunk_id` is the chunk_id of the terminal output, `line_start` and `line_end` are the 1-indexed start and end line numbers of the relevant output within that chunk.
+- Line ends are optional, and if not provided, line end is the same as line start, so only 1 line is cited.
+Codex
+Author
+OpenAI</snippet><url>https://openai.com/index/introducing-codex/?_bhlid=e84110748878a276c02efa492f172b7ba21816d3</url><publish_time>2025年5月16日0时0分</publish_time><text_length>2166</text_length></document><document reference_id="https://gist.github.com/0xfauzi/0898158d12ea3b0d3b1a7719b8906e85"><title>Agents.md descriptions · GitHub</title><host>GitHub Gist</host><snippet>You propose establishing a dedicated internal GitHub repository to share AGENTS.md files and related documentation for using OpenAI’s Codex CLI within the company. The goal is to standardize how developers leverage Codex by providing:
+Global Agents workflows: e.g. a two-stage “plan then implement” agent setup.
+Project-level Agents.md templates: standardized formats for common project types (Python/FastAPI services, Terraform IaC, front-end UI projects, AWS Lambdas, etc.Usage documentation: a guide on installing and using Codex CLI (with company-specific tips). Proposed Structure: Organize the repository to clearly separate global agent configurations from project templates. global-agents/ – Directory containing various global AGENTS.md files (each a different workflow or “agent persona” for use in ~/.md).) By adhering to a template, every project’s AGENTS.md will cover “what the AI needs to know” in a predictable format. This makes it easier for developers to write them and for the agent to parse them. In fact, Codex (and other agents) treat AGENTS.md somewhat like a checklist or to-do list – if you explicitly list a step (e.g. “run npm test before committing”), the agent will often attempt to execute that step on its own xugj520.So writing clear, actionable instructions is key to leveraging Codex’s automation capabilities while keeping control. md – Two-Stage Workflow Agent One idea you’ve already been using to great effect is a two-stage “Plan then Implement” workflow for Codex. This file provides personal guidance to Codex whenever it runs (regardless of project) raw.How it works: This global agent definition sets a default behavior for Codex to always begin with planning. In practice, when you type a request in Codex, it will read these instructions and act as a “junior architect” first, giving you a plan. You then confirm and let it proceed. This can be done manually by switching Codex to read-only mode for the planning phase and then auto-mode for execution (or simply approving the plan message to continue) developers.openai.com . By having this logic in ~/.codex/AGENTS.md, you don’t have to prompt for a plan every time – it’s baked into the AI’s “memory”. This is a powerful pattern to share with others, as it can significantly improve coding outcomes and reduce erroneous code. (It’s much easier to correct a plan than to fix code that was written with the wrong approach!Also, keep the global Agents.Documentation: Using the Codex CLI (Installation & Usage Guide) Alongside the Agents repository, you should provide a documentation page to help colleagues get started with Codex CLI and understand how to use these Agents.md files. This could be the repository’s README or a separate USAGE.md linked from the README. Below is a detailed guide you can use as a starting point for that documentation. It covers installation, basic usage, and how Agents.md fits into the workflow:
+This document explains how to set up and use the OpenAI Codex CLI for AI-assisted development, as well as how to leverage our standardized AGENTS.md files for better results.
+Introduction to Codex CLI
+OpenAI’s Codex CLI is a command-line AI coding assistant that runs on your local machine:contentReference[oaicite:23]{index=23}. You can think of it as an AI pair programmer in your terminal – it can read your codebase, suggest code changes, create new files, fix bugs, and even run tests or commands as directed:contentReference[oaicite:24]{index=24}. It works in an interactive chat-like interface in the terminal.
+Key features of Codex CLI:
+Context awareness: It reads your project files to tailor its suggestions.
+Agentic actions: It can execute shell commands, modify code, run the app/tests, etc., to complete tasks (with your approval).
+Integration with AGENTS.md: It automatically looks for <beginning of the code>AGENTS.md<end of the code> files to get project-specific guidance:contentReference[oaicite:25]{index=25}, which is how we provide it knowledge of our workflows.
+Install Codex CLI: You need an OpenAI account with access (ChatGPT Plus/Enterprise).npm: <beginning of the code>npm install -g @openai/codex<end of the code>
+Homebrew (Mac): <beginning of the code>brew install codex<end of the code>
+(Refer to OpenAI’s installation docs for latest instructions. Windows users should use WSL as Codex is experimental on Windows:contentReference[oaicite:26]{index=26}.Login/Authentication: Run <beginning of the code>codex<end of the code> in your terminal. The first time, it will prompt you to authenticate. Choose “Sign in with ChatGPT” and log in using your OpenAI credentials (our company’s enterprise SSO if applicable):contentReference[oaicite:27]{index=27}.
+Simply run <beginning of the code>codex<end of the code> in the terminal within your project directory. This starts an interactive session with Codex’s Text User Interface (TUI):contentReference[oaicite:29]{index=29}. You can type commands or questions as if chatting with a colleague. <end of the code> – It will read the code/Agents.Once Codex is running, the typical workflow is:
+Ask Codex for what you want (feature, fix, explanation, etc.).It will often present a diff of code changes and either auto-apply them or wait for your approval.  OpenAI has a specialized model GPT-5-Codex tuned for coding agents; we recommend using it for better code results
+Auto (default): Codex can read files, write code, and run commands automatically, but will pause for confirmation if it tries to modify something significant or outside the project
+Read-Only: Codex will only read and discuss, but not edit files or run code until you switch mode. This is useful if you just want a plan or discussion without any changes.
+Full Access: Codex will perform all actions (including running code, installing deps, even internet access if allowed) without asking. Using AGENTS.md (Project and Global Memory)
+One of Codex’s strongest features is using memory files to give it context
+raw.githubusercontent.com
+:
+Global ~/.codex/AGENTS.md: Personal preferences or workflow (for example, our “Plan then Implement” instructions). We have a recommended global Agents.md in our Agents repo that you can use.
+Project AGENTS.md: This should exist in the root of each repository (we’re providing templates for you!). It contains project-specific info: how to run, build, test, code conventions, etc. Codex will automatically read it. For instance, if you ask “Add a field to the database model,” the instructions in AGENTS.md will help Codex follow the right steps (like running migrations or updating tests)
+dev.to
+.
+Subfolder AGENTS.md: In large projects, sub-modules can have their own. Codex uses the closest one relevant to where it’s working
+agents.md
+agents.md
+. (Most of our projects won’t need this, unless we have a monorepo.)
+How to use it: Simply ensure you have the appropriate AGENTS.md files in place. Codex will merge them automatically (global > repo > subdir). If you make changes to an Agents.md (for example, add a new common command), you may need to restart the Codex session or use the /reload command to have it re-read the file. You can also ask Codex to help create an Agents.md for a new project. A nifty trick: within a Codex session in a new repo, type the command /init. Codex will generate a starter AGENTS.md file with some guesses (it basically scaffolds it from the project structure)
+Treat that as a draft – you should then edit and fill it with accurate info (using our templates as a reference). The real value comes from customizing it to our project’s actual needs
+, so don’t hesitate to add details.
+Codex reads the code, sees AGENTS.md which tells it how to run the app and tests, and perhaps the coding style.
+Planning: Because we use the two-stage global agent, Codex will first output a plan: e.Codex switches to implementation: it creates/modifies files to add the route, uses the conventions from the project (maybe reading function names from code), and writes the test.
+Now you have new code and tests, all done with the AI’s help, following our project standards.
+Throughout this, because AGENTS.md guided it, Codex knew to run pytest and not something else, it knew about our S3 utility (if documented in the project overview), and followed our commit/test guidelines. This reduces the friction in using the AI.
+Iterate with the AI: Instead of asking for a huge change all at once, break tasks down. Codex excels at focused changes. md...
+Leverage the CLI UI: The Codex TUI lets you scroll through file diffs, approve or reject chunks, and even open an editor view of files. Don’t hesitate to use those features to maintain control.
+Stay updated: OpenAI regularly updates Codex CLI. Check the #ai-tools internal channel (if we have one) or Codex release notes. Respect approvals: If Codex is in read-only mode and you want it to execute code, switch to auto or explicitly tell it. Similarly, keep an eye on when it asks permission – it might be doing something like installing a new pip package or running a migration. For any issues with the Codex CLI (installation problems, login issues, etc.), refer to OpenAI’s official docs or reach out to the dev-tools team internally. We also maintain an internal FAQ in this repository (see docs/FAQ.By using this tool in combination with well-crafted AGENTS.md is explained with references to how Codex merges those files:contentReference[oaicite:46]{index=46}.
+For example, an MCP integration could allow Codex to search our internal wiki when asked high-level questions. This is advanced, but perhaps “cool”: the AI could answer questions about internal systems by fetching data from documentation.
+- **Custom Tools/Commands:** We could develop custom Codex “tools”. The Agents SDK (OpenAI Agents) allows defining tools the AI can use (like web search, database query, etc.):contentReference[oaicite:56]{index=56}. An idea: a tool that queries our internal API catalogue or microservice registry, so Codex can automatically look up API specifications or common library functions during its session. This would make it even smarter about our specific environment.
+Each of these integrations would require some effort and security considerations (we must ensure the AI only accesses what is allowed). But they demonstrate how Codex could be woven deeper into our dev process:
+- With **ChatOps (Slack)**, developers can get AI help in conversational channels.
+- With **CI/CD integration**, we reduce manual fixes and catch issues faster.
+- With **PR reviews by Codex**, we maintain code quality and share knowledge (Codex might point to docs or best practices in comments).- Overall, these “cool” ideas can be piloted after we get the basics (Agents.md repo and usage) up and running.
+**Conclusion:** The plan is to set up an internal GitHub repository named something like `codex-agents-registry` (for example). It will host a collection of curated `AGENTS.md` templates and documentation. By standardizing our approach to AI-assisted coding, we’ll make it easy for any developer in the company to pick up Codex CLI and be productive. The detailed examples above can be copy-pasted as starting files. 
+To recap, you should:
+1. **Create the repo** with the structure mentioned.
+2. **Populate it** with the example Agents.md files (global and project-specific) – adjust any company-specific details as needed.
+3. **Add the usage docs** (installation and how-to) so new users can onboard themselves.
+4. **Announce and educate** the team about this repository. Maybe hold a brown-bag session to demo the two-stage workflow and how to apply these templates to their projects.
+5. **Encourage contributions:** as people try Codex in various contexts, they can propose new Agents.md templates or enhancements (maybe a template for a Django app, or a data science notebook project, etc.). This registry can grow to cover many scenarios.
+By doing this, you truly become the go-to person for Codex CLI at work, providing not just a tool but an ecosystem and best practices around it. It’s an exciting initiative at the intersection of AI and developer productivity – good luck, and happy coding with your new AI agent friend! AGENTS.md
+
+https://agents.md
+AGENTS.md Handbook: Building Robot-Friendly Developer Workflows with AI Coding Assistants | Efficient Coder
+https://www.cn/en/archives/agents-md-handbook-ai-coding.AGENTS.md
+
+https://agents.md
+
+AGENTS.md
+
+https://agents.md
+How do you use agents.md in codex cli or vs code extension? AGENTS.md Handbook: Building Robot-Friendly Developer Workflows with AI Coding Assistants | Efficient Coder
+cn/en/archives/agents-md-handbook-ai-coding.AGENTS.md Handbook: Building Robot-Friendly Developer Workflows with AI Coding Assistants | Efficient Coder
+</snippet><url>https://gist.github.com/0xfauzi/0898158d12ea3b0d3b1a7719b8906e85</url><publish_time>2025年10月17日11时13分</publish_time><text_length>2253</text_length></document><document reference_id="https://blog.csdn.net/qing_gee/article/details/161582155"><title>同事问:“Codex你也在用?“我说:“是啊，但你的AGENTS. md当Prompt还是当Readme?“他愣住了。_agents.md-CSDN博客</title><host>CSDN博客</host><snippet>Codex 最近的热度非常高，和 Claude Code 一起成为继 OpenClaw 之后，AI 圈又一个炙手可热的词。
+反正我是文用 Claude Code ，武用 Codex。
+上一篇我们分析了 Claude Code 的 CLAUDE.md，今天我们来分析分析 Codex 的 AGENTS.md 。
+确实都是 Markdown 文件，但写得好和写得烂，Codex 的工程能力差距能有天壤之别。
+AGENTS.md 是一个面向 Codex 编程的指令文件，纯 Markdown 格式，没有强制字段，放在项目根目录下就行。
+AGENTS.md 是一个开放标准，由 Linux 基金会下的 Agentic AI Foundation 管理，目前已经被 60,000+ 开源项目采用，支持 25+ 工具，包括 OpenAI Codex、Google Jules、GitHub Copilot、Cursor、Aider、Zed、JetBrains Junie 等等。
+AGENTS.md 是写给 Agent 看的，告诉 AI“构建命令是什么、代码风格有哪些要求、哪些目录不能动、改了代码之后要同步哪些文件”。
+02、Codex 的加载机制
+搞懂加载机制，才能知道 AGENTS.md 应该放在哪、怎么组织。
+Codex 每次启动时会构建一个指令链（instruction chain），这个过程只执行一次。
+加载顺序分两层：
+第一层：全局配置。 Codex 会先去 <beginning of the code>~/.codex/<end of the code> 目录下找。如果存在 <beginning of the code>AGENTS.override.md<end of the code> ，就读它；不存在就读 <beginning of the code>AGENTS.md<end of the code> 。注意，两者只取一个，不会叠加。
+每到一个目录，按这个顺序查找：<beginning of the code>AGENTS.override.md<end of the code> → <beginning of the code>AGENTS.md<end of the code> → fallback 文件名。还有一个细节差异：Codex 有一个 <beginning of the code>project_doc_max_bytes<end of the code> 配置项，默认 32 KiB。
+所有 AGENTS.md 文件拼接后的总大小不能超过这个值，超了就会被截断。Claude Code 没有这个硬性限制，但有指令预算的软限制（上一篇讲过，500 条指令密度下准确率只有 68%）。
+在 <beginning of the code>~/.codex/config.toml<end of the code> 里可以调大这个值：
+<beginning of the code>
+project_doc_max_bytes = 65536
+project_doc_fallback_filenames = ["TEAM_GUIDE.md", ".agents.md"]
+<end of the code>
+03、OpenAI 官方的 AGENTS.md
+OpenAI 自己的 Codex 仓库（github.com/openai/codex）就有一份 AGENTS.md。
+- Never modify code...
+没有长篇大论解释什么是“单一职责”，没有画分层架构图，就是告诉 Agent：这个 crate 已经太大了，新功能别往里塞，考虑放到其他 crate 或者新建一个。
+04、怎么写出高质量的 AGENTS.md
+OpenAI 官方在最佳实践文档里有一句原话特别精辟：
+A short, accurate AGENTS.md is more useful than a long file full of vague rules.
+一份短小精准的 AGENTS.md，比一份充斥模糊规则的长文件有用得多。和上一篇讲 CLAUDE.md 时提到的“指令预算”是一个道理。
+写得越多，Agent 遵循率越低。
+该写什么
+①、构建和测试命令。 这是最基本的，也是 Agent 最常用的信息。
+Agent 每次改完代码都需要知道怎么构建、怎么跑测试。写清楚了 Agent 就能自动完成“改代码 → 构建 → 测试 → 格式化”的完整流程。
+如果你的项目有多种测试方式（快速回归、全量测试、单个测试），全部列出来，Agent 会根据场景选择最合适的。如果你的代码是热部署，这一条更重要，不然每次 build 会很烦人的。
+②、项目特有的编码规范。 只写和行业默认不一样的部分。
+如果你的团队约定请求对象用 <beginning of the code>*Params<end of the code> 后缀、响应用 <beginning of the code>*Response<end of the code> ，这种信息不写的话，Agent 可能一会儿用 <beginning of the code>*Request<end of the code>，一会儿用 <beginning of the code>*Req<end of the code> ，命名风格乱成一锅粥。
+③、红线规则。 “禁止提交 .env 文件”“不要往 codex-core 添加新功能”。这些是 Agent 一旦违反就会造成严重后果的硬约束。
+红线规则最好用明确的否定句式，如“禁止”“不要”“Never”，让 Agent 在处理相关文件时能第一时间触发警觉。
+③、代码定位策略。 “search_code 是 RAG 辅助，优先用 glob → grep → read”。
+告诉 Agent 用什么姿势找代码最高效。不同项目的代码搜索最优路径不一样，Agent 默认的搜索策略未必适合你的项目。明确告诉它优先级，能减少很多无效操作。
+05、AGENTS.md 和 CLAUDE.md 的协同
+很多小伙伴和我一样，Claude Code 和 Codex 都在用。那 AGENTS.md 和 CLAUDE.md 怎么共存？
+我的做法是这样的。
+AGENTS.md 作为通用指令文件。 把构建命令、代码规范、架构约定、红线规则这些“不管用什么 Agent 都需要遵守的内容”写在 AGENTS.md 里。
+CLAUDE.md 作为 Claude Code 的增强文件。 在 CLAUDE.md 里用 <beginning of the code>@AGENTS.md<end of the code> 导入通用规则，然后额外添加 Claude Code 特有的配置，比如 Skills 引用、memory 相关的规则、hooks 配置说明等。
+这样做的好处是：通用规则只维护一份，改 AGENTS.md 就两边都生效了。
+Codex 那边不需要做任何额外配置，它天然就读 AGENTS.md。
+还有一个小技巧。
+Codex 的 <beginning of the code>config.toml<end of the code> 里有一个 <beginning of the code>project_doc_fallback_filenames<end of the code> 配置，可以把 <beginning of the code>CLAUDE.md<end of the code> 加进去：
+<beginning of the code>
+project_doc_fallback_filenames = ["CLAUDE.md", "TEAM_GUIDE.md"]
+<end of the code>
+toml
+这样如果项目里没有 AGENTS.md 但有 CLAUDE.md，Codex 也会读取它。
+06、Codex 的 Agent Loop 架构
+AGENTS.md 只是 Codex 的指令入口。真正决定 Codex 工程能力的，是它背后的 Agent Loop。
+OpenAI 今年发了一篇技术博客《Unrolling the Codex Agent Loop》，把 Codex 的核心引擎——harness 的内部架构公开了。这篇文章的技术密度非常高，我把核心要点拆出来。
+来源：https://openai.com/index/unrolling-the-codex-agent-loop/
+一个 Turn 的完整生命周期
+Codex 的 Agent Loop 遵循经典的 Agent 模式：用户输入 → 模型推理 → 工具执行 → 模型推理 → … → 最终响应。
+从用户发一条消息到 Codex 给出回复，这个过程叫做一个 Turn。一个 Turn 里面可能包含几十次“模型推理 → 工具调用”的循环。
+模型每次推理的输出只有两种形式：要么是给用户的最终回复，要么是一个工具调用请求。只要输出的是工具调用，循环就继续；输出了最终回复，循环就结束。
+统一 Harness 与 App Server
+还有一个架构层面的重要信息。
+Codex 的 CLI、VS Code 扩展、Web 应用、macOS 桌面应用，底层跑的是同一套 harness。
+连接它们的是 Codex App Server——一个双向的 JSON-RPC API。
+为什么要做统一的 harness？
+因为 Agent Loop 的逻辑非常复杂：Prompt 构建、工具调度、沙箱管理、Context 压缩、缓存优化，这些如果每个客户端自己实现一遍，维护成本极高，而且容易出现行为不一致。统一 harness 保证了不管你在终端、IDE 还是浏览器里用 Codex，Agent 的行为是一样的。
+来源：https://openai.com/index/unlocking-the-codex-harness/
+这个架构还有一个副产品：因为整个 Codex 都走 Open Responses API，理论上可以接任何兼容这个 API 的模型，包括本地部署的开源模型。
+Codex 团队在博客里也明确说了这一点。
+Prompt 的分层构建
+AGENTS.md 在 Codex 的 Prompt 中处于什么位置？
+Codex 的 Prompt 构建是分层的，按优先级从高到低排列：
+更准确地说，AGENTS.md 会被 Codex 发现、拼接后，作为项目级的 user instructions 放进初始上下文里。
+它不是系统指令，也不是工具定义的一部分。系统/开发者级别的安全约束、沙箱策略、权限策略仍然优先；AGENTS.md 主要承担的是“项目约定”和“工作偏好”的持久上下文。
+Prompt Cache 与线性复杂度
+这是 Codex 性能优化的核心机制。
+Agent Loop 每一轮都需要把指令、工具定义、对话历史等上下文一起交给模型。如果不做优化，随着对话越来越长，每轮推理的 token 消耗是 O(n²) 级别的——第 1 轮发 1000 token，第 2 轮发 2000，第 10 轮发 10000…累计消耗呈二次方增长。
+Codex 通过 Prompt Cache 把这个问题压到了 O(n)。原理是：Prompt 里稳定的前缀内容可以被缓存，只要前缀精确匹配，就可以复用之前的计算结果，只需要对新增的部分做推理。
+但有个前提：前缀必须精确匹配。工具列表变化、模型变化、沙箱配置变化、approval mode 变化、工作目录变化，都可能导致缓存失效。
+AGENTS.md 作为启动时加载的稳定项目上下文，也有利于提高缓存命中率。但不要把它理解成“为了缓存才这样设计”。更准确的说法是：AGENTS.md 提供稳定的项目规则，Prompt Cache 则利用这种稳定性做性能优化。
+Context Window 压缩
+当 token 计数超过阈值时，Codex 会调用一个专门的 <beginning of the code>/responses/compact<end of the code> 端点。
+这个端点返回一个压缩后的消息列表，替代原来的完整对话历史。压缩后的内容包含一个加密的 compaction 项，保留了模型对原始对话的“潜在理解”。
+不是简单的截断或摘要，而是用模型自身来做信息提炼和压缩。被压缩的对话内容虽然消失了，但模型对项目上下文的理解还在，不会因为压缩而“失忆”。
+对 AGENTS.md 来说有一个关键影响：AGENTS.md 的内容不会被压缩。
+它属于 Codex 会反复带入的初始项目上下文，无论对话多长、压缩多少次，AGENTS.md 里的核心规则通常都会继续存在。这就是“持久化指令”这个名字的真正含义。
+Codex 的工具体系
+Agent Loop 里调用的“工具”分三类。
+第一类是 Codex 内置工具：文件读写、Shell 执行、代码搜索。这些工具运行在沙箱内，受沙箱策略约束。
+第二类是 API 提供的工具，由 Responses API 暴露。
+第三类是用户通过 MCP 接入的外部工具。这类工具不受 Codex 沙箱保护，需要自己实现安全边界。
+这三类工具在 Prompt 的 Tool Definitions 层被一起注册。模型在推理时不区分工具来源，它只看工具的名称、描述和参数定义来决定调用哪个。
+AGENTS.md 可以在这里发挥作用——告诉模型优先用哪些工具、避免用哪些工具，相当于给工具调度加了一层人为偏好。
+08、面试怎么回答
+讲完底层原理，回到面试场景。
+如果面试官问：“你用 Codex 的时候，AGENTS.md 是怎么写的？”
+第一句讲标准。 AGENTS.md 是 Linux 基金会管理的开放标准。和 CLAUDE.md 的区别是：CLAUDE.md 是 Claude Code 的私有格式，AGENTS.md 是通用格式。
+第二句讲加载。 Codex 启动时构建指令链，全局 → 项目根目录 → 当前目录，逐层拼接，后面优先级高。override 文件替代同级 AGENTS.md。32 KiB 硬截断。
+第三句讲内容。 只写 Agent 推断不出来的东西：构建命令、编码规范、红线约束、联动规则。
+如果面试官追问更深——“AGENTS.md 在 Codex 的 Prompt 里处于什么位置？”
+AGENTS.md 会被 Codex 聚合进初始上下文里的项目级 user instructions。
+这个位置意味着两件事：
+第一，它低于 system/developer 级别的安全和权限约束，但会作为项目约定持续影响 Agent 的行为；
+第二，它通常比较稳定，有利于 Prompt Cache 复用前缀计算，从而降低长对话 Agent Loop 的成本。
+</snippet><url>https://blog.csdn.net/qing_gee/article/details/161582155</url><publish_time>2026年6月1日10时17分</publish_time><text_length>4831</text_length></document><document reference_id="https://codex.danielvaughan.com/2026/04/16/codex-proactive-memory-thread-automations-self-directing-agents/"><title>From Reactive to Proactive: How Codex Memory + Thread Automations Create Self-Directing Agents</title><host>Codex Knowledge Base</host><snippet>From Reactive to Proactive: How Codex Memory + Thread Automations Create Self-Directing Agents
+April 16, 2026
+Updated September 18, 2026
+proactive-memory thread-automations
+self-directing super-app task-suggestions
+slack-notion scheduling
+On this page
+The Shift from Reactive to Proactive
+How Codex Memories Work
+Thread Automations: Heartbeat-Style Recurring Agents
+Combining Memory and Automations: Self-Directing Patterns
+Comparison with Claude Code’s Memory Approach
+Enterprise Implications
+Practical Getting Started
+What Comes Next
+Citations
+From Reactive to Proactive: How Codex Memory + Thread Automations Create Self-Directing AgentsFor most of its life, Codex CLI has been a sophisticated executor: you tell it what to do, and it does it well. Platform release 26.415 and CLI v0.121.0 change that dynamic fundamentally. With proactive memory, context-aware suggestions, and thread automations, Codex agents can now identify work, propose next steps, and execute recurring tasks without human initiation^{1}. This article examines the mechanics behind each feature and how they combine to create self-directing agent workflows.
+The Shift from Reactive to Proactive
+Thibault Sottiaux, head of Codex at OpenAI, framed the strategic intent clearly in a recent press briefing: “We’re building the super app out in the open. This release is about developers. In the future, we will broaden it up to a wider audience”^{2}. The ambition is a unified workspace — ChatGPT, Codex, and Atlas browser merged into a single context-aware environment where agents don’t just respond to prompts but actively surface work^{3} .
+The practical implication: Codex can now propose useful follow-ups when you start a new session, drawing on project context, connected plugins, and accumulated memory to suggest where to pick up^{4}. Rather than the developer maintaining a mental model of outstanding tasks, the agent does it.
+How Codex Memories Work
+Storage and Generation
+Memories are stored locally under <beginning of the code>~/.codex/memories/<end of the code> (configurable via <beginning of the code>CODEX_HOME<end of the code>). The system maintains summaries, durable entries, recent inputs, and supporting evidence from prior threads as generated state files^{5}. After a thread becomes sufficiently idle, Codex asynchronously processes eligible sessions to extract memory entries. Short-lived or still-active sessions are skipped to avoid capturing incomplete work^{5} .
+<beginning of the code>
+flowchart TD
+    A[Thread completes / goes idle] --> B{Session eligible?}
+    B -->|Short-lived or active| C[Skip]
+    B -->|Eligible| D[Async extraction]
+    D --> E[Redact secrets]
+    E --> F[Generate memory entries]
+    F --> G["~/.codex/memories/"]
+    G --> H[Inject into future threads]
+<end of the code>
+Configuration
+Enable memories in <beginning of the code>config.toml<end of the code> under the <beginning of the code>[features]<end of the code> section:
+<beginning of the code>
+[features]
+memories = true
+
+[memories]
+generate_memories = true    # New threads become memory inputs
+use_memories = true          # Existing memories inject into future sessions
+extract_model = "o4-mini"    # Model for per-thread extraction
+consolidation_model = "o3"   # Model for global consolidation
+<end of the code>
+The <beginning of the code>/memories<end of the code> slash command within the TUI or app provides per-thread control — selectively enabling or disabling memory generation and retrieval for individual sessions^{5} .
+What Gets Remembered
+Memories carry stable preferences, project conventions, and recurring work patterns into future threads^{1}. Crucially, secrets are automatically redacted from generated memory fields^{5}. The system is designed as a supplementary local recall layer — mandatory team guidelines should remain in <beginning of the code>AGENTS.md<end of the code> or checked-in documentation^{5} .
+Thread Automations: Heartbeat-Style Recurring Agents
+Thread automations are the scheduling primitive that makes proactive agents possible. Unlike standalone automations that start fresh each run, thread automations are heartbeat-style recurring wake-up calls attached to the current thread, preserving full conversation context across executions^{6}.
+Scheduling Options
+Thread automations support three scheduling modes^{6}:| Mode | Use Case | Example |
+| --- | --- | --- |
+| Minute-based intervals | Active follow-up loops | Check build status every 5 minutes |
+| Daily schedules | Regular check-ins | Morning standup summary at 09:00 |
+| Custom cron syntax | Flexible cadences | Every weekday at market close |
+
+Writing Durable Prompts
+The documentation emphasises that thread automation prompts must be durable — they should describe what Codex should do each time the thread wakes up, how to decide whether there is something important to report, and when to stop or ask for input^{6}. A poorly written prompt results in noise; a well-crafted one creates autonomous value.
+Example of a durable automation prompt:
+<beginning of the code>
+Check the status of open PRs in this repository. If any PR has new review
+comments since the last check, summarise the feedback and suggest responses.
+If all PRs are approved, report that and stop the automation. If a PR has
+been open for more than 48 hours without review, flag it for escalation.
+<end of the code>
+Skill Integration
+Thread automations can trigger skills using <beginning of the code>$skill-name<end of the code> syntax, enabling complex automation sequences without additional configuration^{6}. This means a single thread automation can orchestrate PR checks, Slack notifications, and code analysis by chaining skills together.
+<beginning of the code>
+flowchart LR
+    subgraph Thread Automation
+        A[Wake up on schedule] --> B[Check context + memory]
+        B --> C{Work to do?}
+        C -->|Yes| D["Trigger $pr-review skill"]
+        D --> E["Trigger $slack-notify skill"]
+        E --> F[Update thread context]
+        C -->|No| G[Sleep until next wake-up]
+    end
+<end of the code>
+Combining Memory and Automations: Self-Directing Patterns
+The real power emerges when memory and thread automations work together. Here are three patterns for enterprise teams.
+Pattern 1: Autonomous Backlog Grooming
+A thread automation runs daily, querying the project’s issue tracker via an MCP plugin. Memories retain knowledge of past triage decisions, team preferences, and recurring issue categories. Over successive runs, the agent learns which issues the team typically prioritises and can pre-label, estimate, and suggest sprint assignments without explicit instruction.
+Pattern 2: Recurring Maintenance Agents
+Set up a weekly thread automation that runs the test suite, checks dependency freshness, and reviews security advisories. Memory accumulates knowledge of which dependencies the team has previously decided to pin, which test failures are known flaky, and what the team’s upgrade cadence looks like. Each run produces a more targeted report than the last.
+Pattern 3: Context-Aware Morning Briefings
+Platform 26.415 introduced context-aware suggestions that help developers pick up relevant follow-ups when they start or return to Codex^{1}. Combined with memories of ongoing work streams and a morning thread automation, Codex can greet you with a prioritised task list drawn from GitHub notifications, Slack threads, and in-progress branches — all without you asking.
+Comparison with Claude Code’s Memory Approach
+The architectural differences between Codex and Claude Code memory systems reflect fundamentally different design philosophies:| Aspect | Codex | Claude Code |
+| --- | --- | --- |
+| Storage | ~/.codex/memories/ — auto-generated state files | ~/.claude/projects//memory/ — MEMORY.md + topic files |
+| Generation | Async extraction after thread idle | Auto-saved during sessions |
+| Retrieval | Model-driven injection into new threads | Grep-based keyword matching^{7} |
+| Cross-session | Proactive — suggests work on session start | Passive — available when queried |
+| Portability | Local, no export protocol | Local, no export protocol^{7} |
+| Consolidation | Dedicated consolidation model pass | Manual via MEMORY.md editing |
+
+Claude Code’s grep-based retrieval works well with dozens of notes but can degrade after months of accumulated history when exact keyword recall becomes difficult^{7}. Codex’s model-driven approach trades compute cost for more semantically aware retrieval, and crucially, enables the proactive suggestion surface that Claude Code currently lacks.
+Enterprise Implications
+The Agentic Pod Model
+For teams running agentic pods — multiple Codex agents working in parallel across isolated worktrees — proactive memory creates a new dynamic. Pod agents can surface their own work items based on accumulated project knowledge, shifting the developer’s role from task dispatcher to reviewer^{3}. The multi-agent parallel execution model, combined with thread automations, means pods can self-organise recurring maintenance work.
+Governance Considerations
+Proactive agents raise governance questions that teams should address early:
+Memory scope: Memories are local by default. Teams sharing a codebase need <beginning of the code>AGENTS.md<end of the code> for authoritative guidelines, with memories supplementing individual workflow preferences^{5}.
+Automation boundaries: Thread automations should have explicit stop conditions to prevent runaway execution.
+Secret handling: While memory generation automatically redacts secrets, teams should audit <beginning of the code>~/.codex/memories/<end of the code> periodically, particularly in shared environments^{5}.
+EU/UK availability: Computer use and memory features face delayed rollout in the EU and UK^{2}. ⚠️ The exact timeline for EU/UK memory availability has not been publicly confirmed.
+Practical Getting Started
+To begin experimenting with self-directing agent workflows:
+# Enable memories in your config cat >> ~/.codex/config.toml << 'EOF'
+[features]
+memories = true
+
+[memories]
+generate_memories = true
+use_memories = true
+EOF
+
+# Start a thread and work normally — memories generate automatically
+codex
+
+# Create a thread automation from within a session # Use the app UI or /automation command to set schedule
+Then write durable prompts for your automations, test them manually first, and iterate. The most effective self-directing agents emerge from well-scoped automation prompts paired with several sessions’ worth of accumulated memory.
+What Comes Next
+Sottiaux’s vision of the “super app built in the open” implies this is early innings^{2}. The current memory system is local and individual; team-shared memory, cross-agent memory protocols, and more sophisticated consolidation strategies are natural next steps. Thread automations will likely gain richer triggering conditions beyond time-based schedules — event-driven wake-ups from webhook sources, for instance.
+For now, the combination of proactive memory and thread automations represents the most significant architectural shift in Codex’s interaction model since the move from cloud-only to CLI. Agents that tell you what to do, rather than waiting to be told, change the developer’s relationship with their tools entirely.
+Citations
+OpenAI, “Codex Changelog — Version 26.415,” OpenAI Developers, April 2026. https://developers.openai.com/codex/changelog ↩ ↩^{2} ↩^{3}
+K. Notopoulos, “OpenAI’s latest Codex update builds the groundwork for its upcoming super app,” Engadget, April 2026. https://www.engadget.com/ai/openais-latest-codex-update-builds-the-groundwork-for-its-upcoming-super-app-170000019.html ↩ ↩^{2} ↩^{3}
+“Exploring OpenAI Codex: Features of the 2026 SuperApp,” Digital Strategy AI, April 2026. https://digitalstrategy-ai.com/2026/04/14/exploring-openai-codex-features/ ↩ ↩^{2}
+“OpenAI’s superapp is taking shape as Codex goes beyond coding,” The New Stack, 2026. https://thenewstack.io/openais-superapp-takes-shape/ ↩
+OpenAI, “Memories — Codex,” OpenAI Developers, 2026. https://developers.openai.com/codex/memories ↩ ↩^{2} ↩^{3} ↩^{4} ↩^{5} ↩^{6} ↩^{7}
+OpenAI, “Automations — Codex App,” OpenAI Developers, 2026. https://developers.openai.com/codex/app/automations ↩ ↩^{2} ↩^{3} ↩^{4}
+“Claude Code Memory System Explained: 4 Layers, 5 Limits, and a Fix,” Milvus Blog, 2026. https://milvus.io/blog/claude-code-memory-memsearch.md ↩ ↩^{2} ↩^{3}</snippet><url>https://codex.danielvaughan.com/2026/04/16/codex-proactive-memory-thread-automations-self-directing-agents/</url><publish_time>2026年9月18日0时0分</publish_time><text_length>2334</text_length></document><document reference_id="https://codex.danielvaughan.com/2026/04/08/codex-cli-memory-internals/"><title>Codex CLI Memory Internals: Pipelines, Secret Sanitisation and Intelligent Forgetting</title><host>Codex Knowledge Base</host><snippet>Codex CLI Memory Internals: Pipelines, Secret Sanitisation and Intelligent ForgettingCodex CLI’s memory subsystem is considerably more sophisticated than a flat file of saved notes. Beneath the <beginning of the code>/m_update<end of the code> slash command sits a multi-phase extraction and consolidation pipeline, a secret sanitisation layer, usage-aware retrieval, and a diff-based forgetting algorithm that prunes stale facts automatically. This article dissects each component, drawing on the open-source Rust implementation and official documentation.
+The Two-Phase Memory Pipeline
+Memory in Codex CLI operates as a two-phase pipeline that transforms raw conversation rollouts into persistent, consolidated knowledge^{1} .
+Phase 1: Startup Extraction
+When Codex identifies “stale” threads — those updated since their last memory extraction — it spawns lightweight extraction agents using the <beginning of the code>gpt-5.1-codex-mini<end of the code> model^{1}. Each agent processes raw <beginning of the code>.jsonl<end of the code> rollout files and produces a <beginning of the code>StageOneOutput<end of the code> struct containing two fields:
+<beginning of the code>raw_memory<end of the code> — detailed Markdown capturing specific facts, decisions, and preferences
+<beginning of the code>rollout_summary<end of the code> — a compact recap of the session’s key outcomes
+Extraction runs in parallel with a default <beginning of the code>CONCURRENCY_LIMIT<end of the code> of 8 jobs^{1}. The system only considers threads within a configurable <beginning of the code>max_age_days<end of the code> window that have been idle for at least <beginning of the code>min_rollout_idle_hours<end of the code>, preventing extraction from active conversations.
+Phase 2: Global Consolidation
+A dedicated “Memory Writing Agent” periodically merges individual Phase 1 outputs into global memory files^{1}. Only one consolidation process runs at a time per <beginning of the code>codex_home<end of the code>, enforced through a database lock via <beginning of the code>try_claim_global_phase2_job<end of the code> with a <beginning of the code>JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL<end of the code> entry in the <beginning of the code>jobs<end of the code> table^{1} .
+Before the consolidation agent runs, the system synchronises the local filesystem with the database using <beginning of the code>sync_rollout_summaries_from_memories<end of the code> and <beginning of the code>rebuild_raw_memories_file_from_memories<end of the code> 1. An <beginning of the code>input_watermark<end of the code> tracks which Stage 1 outputs have already been processed, enabling incremental updates rather than full rebuilds.
+<beginning of the code>
+Storage Architecture
+The memory subsystem stores its artefacts under <beginning of the code>~/.codex/memories/<end of the code> (or wherever <beginning of the code>CODEX_HOME<end of the code> points)^{1} 2 :| File / Directory | Purpose |
+| --- | --- |
+| memory_summary.md | High-level navigational summary injected into every prompt |
+| MEMORY.md | Searchable registry and handbook of aggregated insights |
+| raw_memories.md | Temporary merge of Phase 1 outputs used as Phase 2 input |
+| rollout_summaries/ | Per-thread recaps with lessons learned and evidence snippets |
+| skills/ | Reusable procedures and scripts (e.g., SKILL.md) |
+
+Rollout summary filenames combine the <beginning of the code>ThreadId<end of the code>, a timestamp fragment, and an optional <beginning of the code>rollout_slug<end of the code> via <beginning of the code>rollout_summary_file_stem<end of the code>1, ensuring unique, traceable files even across rapid session turnover.
+Context Injection at Startup
+During <beginning of the code>Session<end of the code> initialisation, the function <beginning of the code>build_memory_tool_developer_instructions<end of the code> reads <beginning of the code>memory_summary.md<end of the code>, wraps it in the <beginning of the code>read_path.md<end of the code> template, and injects it into the model’s developer instructions^{1}. This injection is capped at <beginning of the code>MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT<end of the code> — currently 5,000 tokens — to preserve context window budget for actual work^{1} .
+The agent can cite specific memory files using <beginning of the code><oai-mem-citation><end of the code> blocks referencing file paths and line ranges^{1}, providing traceability back to the original learning source.
+Secret Sanitisation
+Before any memory is persisted to disc, Codex CLI automatically scans for secrets^{2}3. The sanitisation layer detects common credential patterns — API keys, tokens, passwords, connection strings — and strips them before the Markdown is written. This prevents accidental leakage of sensitive material into <beginning of the code>~/.codex/memories/<end of the code>, which could otherwise be read by any process with filesystem access.
+The sanitisation operates at the Phase 1 boundary: raw rollouts may contain secrets typed during a session, but the extraction agent’s output is scrubbed before being stored in the <beginning of the code>stage1_outputs<end of the code> table or written to disc^{2} .
+⚠️ The exact regex patterns and detection heuristics used for secret scanning are not publicly documented in the open-source repository at the time of writing. The feature is confirmed to exist^{2} 3, but implementation details beyond “automatic scanning before write” are inferred from behaviour rather than source inspection.
+Diff-Based Forgetting
+Introduced in v0.106.0^{2}, the diff-based forgetting algorithm addresses memory bloat — the tendency for accumulated facts to grow stale and contradictory over time.
+Rather than treating memory as append-only, the consolidation agent in Phase 2 performs differential comparison between:
+Existing global memory (<beginning of the code>MEMORY.md<end of the code> and rollout summaries)
+Incoming Stage 1 outputs (new sessions since the last consolidation)
+Facts in the existing memory that are contradicted or superseded by newer information are removed or updated. This mirrors how human memory works — recent experiences overwrite outdated beliefs rather than simply stacking alongside them.
+The system also includes a pruning mechanism: Stage 1 outputs older than <beginning of the code>max_unused_days<end of the code> that have not been referenced by the...
+Usage-Aware Memory Selection
+Also introduced in v0.106.0^{2}, usage-aware selection ensures that frequently referenced memories are prioritised during retrieval. When the agent cites a memory via <beginning of the code><oai-mem-citation><end of the code> blocks, the system calls <beginning of the code>record_stage1_output_usage<end of the code> to increment the <beginning of the code>usage_count<end of the code> and update the <beginning of the code>last_usage<end of the code> timestamp in the database^{1} .
+During Phase 2 consolidation, the agent has access to these usage statistics, allowing it to:
+Preserve high-frequency memories even if they are older
+Deprioritise rarely accessed facts that may no longer be relevant
+Surface recently used memories more prominently in <beginning of the code>memory_summary.md<end of the code>
+This creates a natural feedback loop: memories that prove useful in practice survive longer, whilst theoretical knowledge that never gets cited gradually fades.
+Interactive Memory Commands
+Codex CLI exposes two slash commands for direct memory manipulation^{2} 4:
+<beginning of the code>/m_update <fact><end of the code>
+Saves a persistent fact immediately. Examples:
+<beginning of the code>
+/m_update always use pytest, never unittest
+/m_update this project uses pnpm, not npm
+/m_update prefer British English in all documentation
+<end of the code>
+These facts bypass the normal Phase 1 extraction pipeline and are written directly to the memory store, making them available from the next session onwards.
+<beginning of the code>/m_drop <query><end of the code>
+Removes memories matching a search query. Useful for correcting outdated preferences or clearing project-specific facts after context switches.
+<beginning of the code>codex debug clear-memories<end of the code>
+Introduced in v0.107.0^{2}, this command performs a complete reset of all stored memories. It is the nuclear option — useful when switching between entirely unrelated projects or when the memory state has drifted significantly from reality.
+<beginning of the code>
+# Reset all memories
+codex debug clear-memories
+
+# Verify the reset
+ls ~/.codex/memories/
+<end of the code>
+CWD Awareness and Project Isolation
+Memory files include working directory context^{2}, enabling project-specific recall. When Codex loads memories at session start, it considers the current working directory to surface memories most relevant to the active project.
+This means a developer working across multiple repositories will naturally see different memory contexts in each — database schema decisions from the backend repo, component naming conventions from the frontend repo — without manual switching.
+Memory vs AGENTS.md: Separation of Concerns
+The memory system and <beginning of the code>AGENTS.md<end of the code> serve complementary but distinct roles^{2} 5:| Aspect | Memory (/m_update) | AGENTS.md |
+| --- | --- | --- |
+| Scope | Personal, per-developer | Team-shared, per-repository |
+| Persistence | ~/.codex/memories/ | Checked into version control |
+| Content | Preferences, learned patterns | Architecture decisions, conventions |
+| Management | Automatic extraction + slash commands | Manual editing |
+| Override | Cannot override AGENTS.md | Takes precedence for project rules |
+
+The three-tier <beginning of the code>AGENTS.md<end of the code> hierarchy (global at <beginning of the code>~/.codex/AGENTS.md<end of the code>, project root, subdirectory)^{5} handles team conventions, whilst the memory system captures individual developer preferences and learned workflows. Mixing the two — putting personal preferences in <beginning of the code>AGENTS.md<end of the code> or team rules in memory — creates confusion and potential conflicts.
+Memory in CI/CD: <beginning of the code>codex exec<end of the code> Behaviour
+When running non-interactively via <beginning of the code>codex exec<end of the code>, the memory system loads automatically^{2}. This means CI/CD pipelines benefit from accumulated knowledge without requiring instruction repetition in each invocation.
+However, there is an important nuance: <beginning of the code>codex exec<end of the code> runs are typically ephemeral and may use a clean <beginning of the code>CODEX_HOME<end of the code>. If you want CI jobs to benefit from persistent memory, you need to either:
+Mount the <beginning of the code>~/.codex/memories/<end of the code> directory as a persistent volume
+Use <beginning of the code>--no-project-doc<end of the code> to skip memory loading entirely for deterministic behaviour^{5}
+# CI with persistent memory (mount volume)
+codex exec --full-auto "run the test suite and fix failures" # CI without memory (deterministic)
+codex exec --full-auto --no-project-doc "run the test suite"
+Configuration Parameters
+The memory pipeline exposes several tuning parameters through the Rust source^{1}:| Parameter | Default | Description |
+| --- | --- | --- |
+| max_age_days | ⚠️ undocumented | Maximum thread age for extraction consideration |
+| min_rollout_idle_hours | ⚠️ undocumented | Minimum idle time before extraction triggers |
+| max_unused_days | ⚠️ undocumented | Age threshold for pruning stale Stage 1 outputs |
+| CONCURRENCY_LIMIT | 8 | Parallel Phase 1 extraction jobs |
+| PRUNE_BATCH_SIZE | ⚠️ undocumented | Batch size for pruning operations |
+| MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT | 5,000 | Token cap for injected memory context |
+
+⚠️ Several parameters lack public documentation for their default values. The constants are defined in the Rust source but not exposed in <beginning of the code>config.toml<end of the code> at the time of writing.
+Practical Recommendations
+Use <beginning of the code>/m_update<end of the code> deliberately — save conventions and preferences, not transient facts
+Audit periodically — inspect <beginning of the code>~/.codex/memories/MEMORY.md<end of the code> to verify the consolidation agent’s summaries are accurate
+Reset when switching domains — <beginning of the code>codex debug clear-memories<end of the code> before onboarding to an unrelated project prevents cross-contamination
+Separate concerns — team rules belong in <beginning of the code>AGENTS.md<end of the code>, personal preferences in memory
+CI determinism — use <beginning of the code>--no-project-doc<end of the code> in CI pipelines where reproducibility matters more than accumulated knowledge
+</snippet><url>https://codex.danielvaughan.com/2026/04/08/codex-cli-memory-internals/</url><publish_time>2026年9月17日0时0分</publish_time><text_length>2477</text_length></document><document reference_id=""><title>Unrolling the Codex agent loop</title><snippet>Codex CLI
+is our cross-platform local software agent, designed to produce high-quality, reliable software changes while operating safely and efficiently on your machine. We’ve learned a tremendous amount about how to build a world-class software agent since we first launched the CLI in April ⁠ . To unpack those insights, this is the first post in an ongoing series where we’ll explore various aspects of how Codex works, as well as hard-earned lessons. To kick off, we’ll focus on the agent loop, which is the core logic in Codex CLI that is responsible for orchestrating the interaction between the user, the model, and the tools the model invokes to perform meaningful software work. We hope this post gives you a good view into the role our agent (or “harness”) plays in making use of an LLM.
+Before we dive in, a quick note on terminology: at OpenAI, “Codex” encompasses a suite of software agent offerings, including Codex CLI, Codex Cloud, and the Codex VS Code extension. This post focuses on the Codex harness, which provides the core agent loop and execution logic that underlies all Codex experiences and is surfaced through the Codex CLI. For ease here, we’ll use the terms “Codex” and “Codex CLI” interchangeably.
+At the heart of every AI agent is something called “the agent loop.” A simplified illustration of the agent loop looks like this:To start, the agent takes input from the user to include in the set of textual instructions it prepares for the model known as a prompt .
+The next step is to query the model by sending it our instructions and asking it to generate a response, a process known as inference. During inference, the textual prompt is first translated into a sequence of input
+tokens
+—integers that index into the model’s vocabulary. These tokens are then used to sample the model, producing a new sequence of output tokens.
+The output tokens are translated back into text, which becomes the model’s response. Because tokens are produced incrementally, this translation can happen as the model runs, which is why many LLM-based applications display streaming output. As the result of the inference step, the model either (1) produces a final response to the user’s original input, or (2) requests a tool call that the agent is expected to perform (e.g., “run <beginning of the code>ls<end of the code> and report the output”). In the case of (2), the agent executes the tool call and appends its output to the original prompt. This output is used to generate a new input that’s used to re-query the model; the agent can then take this new information into account and try again.
+This process repeats until the model stops emitting tool calls and instead produces a message for the user (referred to as an assistant message in OpenAI models).Because the agent can execute tool calls that modify the local environment, its “output” is not limited to the assistant message. In many cases, the primary output of a software agent is the code it writes or edits on your machine. Every time you send a new message to an existing conversation, the conversation history is included as part of the prompt for the new turn, which includes the messages and tool calls from previous turns:This means that as the conversation grows, so does the length of the prompt used to sample the model. This length matters because every model has a context window, which is the maximum number of tokens it can use for one inference call. Note this window includes both input and output tokens. As you might imagine, an agent could decide to make hundreds of tool calls in a single turn, potentially exhausting the context window. For this reason, context window management is one of the agent’s many responsibilities. The Codex CLI sends HTTP requests to the
+to run model inference. We’ll examine how information flows through Codex, which uses the Responses API to drive the agent loop.
+Building the initial prompt
+As an end user, you don’t specify the prompt used to sample the model verbatim when you query the Responses API....
+In the initial prompt, every item in the list is associated with a role. <beginning of the code>tools<end of the code>
+: a list of tools the model may call while generating a response
+In Codex, the <beginning of the code>instructions<end of the code> field is read from the
+<beginning of the code>model_instructions_file<end of the code>
+in <beginning of the code>~/.codex/config.the <beginning of the code>base_instructions<end of the code> associated with a model
+are used. Model-specific instructions live in the Codex repo and are bundled into the CLI (e.g.The <beginning of the code>tools<end of the code> field is a list of tool definitions that conform to a schema defined by the Responses API. For Codex, this includes tools that are provided by the Codex CLI, tools that are provided by the Responses API that should be made available to Codex, as well as tools provided by the user, usually via MCP servers:
+Codex
+inserts the following items
+into the <beginning of the code>input<end of the code> before adding the user message:
+A message with <beginning of the code>role=developer<end of the code> that describes the sandbox that applies only to the Codex-provided <beginning of the code>shell<end of the code> tool defined in the <beginning of the code>tools<end of the code> section. The message is built from a template where the key pieces of content come from snippets of Markdown bundled into the Codex CLI, such as
+Contents of <beginning of the code>AGENTS.override.md<end of the code> and <beginning of the code>AGENTS.md<end of the code> in <beginning of the code>$CODEX_HOME<end of the code>
+Subject to a limit (32 KiB, by default), look in each folder from the Git/project root of the <beginning of the code>cwd<end of the code> (if it it exists) up to the <beginning of the code>cwd<end of the code> itself: add the contents of any of <beginning of the code>AGENTS.override.md<end of the code>, <beginning of the code>AGENTS.md<end of the code>, or any filename specified by <beginning of the code>project_doc_fallback_filenames in config.toml<end of the code>
+a short preamble about skills
+skill metadata
+for each skill
+"output": "<p align=\"center\"><code>npm i -g @openai/codex</code>..."
+The resulting prompt used to sample the model as part of the subsequent query would look like this:In particular, note how the old prompt is an exact prefix of the new prompt. This is intentional, as this makes subsequent requests much more efficient because it enables us to take advantage of prompt caching (which we’ll discuss in the next section on performance).Looking back at our first diagram of the agent loop, we see that there could be many iterations between inference and tool calling. The prompt may continue to grow until we finally receive an assistant message, indicating the end of the turn:
+In the Codex CLI, we present the assistant message to the user and focus the composer to indicate to the user that it’s their “turn” to continue the conversation. If the user responds, both the assistant message from the previous turn, as well as the user’s new message, must be appended to the <beginning of the code>input<end of the code> in the Responses API request to start the new turn:
+Once again, because we are continuing a conversation, the length of the <beginning of the code>input<end of the code> we send to the Responses API keeps increasing:Let’s examine what this ever-growing prompt means for performance.
+Performance considerations
+You might be asking yourself, “Wait, isn’t the agent loop quadratic in terms of the amount of JSON sent to the Responses API over the course of the conversation?” And you would be right. While the Responses API does support an optional
+<beginning of the code>previous_response_id<end of the code>
+parameter to mitigate this issue, Codex does not use it today, primarily to keep requests fully stateless and to support Zero Data Retention (ZDR) configurations.
+Avoiding <beginning of the code>previous_response_id<end of the code> simplifies things for the provider of the Responses API because it ensures that every request is stateless. This also makes it straightforward to support customers who have opted into
+Zero Data Retention (ZDR)
+, as storing the data required to support <beginning of the code>previous_response_id<end of the code> would be at odds with ZDR. Note that ZDR customers do not sacrifice the ability to benefit from proprietary reasoning messages from prior turns, as the associated <beginning of the code>encrypted_content<end of the code> can be decrypted on the server. (OpenAI persists a ZDR customer’s decryption key, but not their data.) See PRs
+Generally, the cost of sampling the model dominates the cost of network traffic, making sampling the primary target of our efficiency efforts. This is why prompt caching is so important, as it enables us to reuse computation from a previous inference call. When we get cache hits, sampling the model is linear rather than quadratic. Our
+prompt caching
+documentation explains this in more detail:
+Cache hits are only possible for exact prefix matches within a prompt. To realize caching benefits, place static content like instructions and examples at the beginning of your prompt, and put variable content, such as user-specific information, at the end. This also applies to images and tools, which must be identical between requests.
+With this in mind, let’s consider what types of operations could cause a “cache miss” in Codex:
+Changing the <beginning of the code>tools<end of the code> available to the model in the middle of the conversation.
+Changing the <beginning of the code>model<end of the code> that is the target of the Responses API request (in practice, this changes the third item in the original prompt, as it contains model-specific instructions).
+Changing the sandbox configuration, approval mode, or current working directory.
+The Codex team must be diligent when introducing new features in the Codex CLI that could compromise prompt caching. As an example, our initial support for MCP tools introduced a
+bug where we failed to enumerate the tools in a consistent order
+, causing cache misses. Note that MCP tools can be particularly tricky because MCP servers can change the list of tools they provide on the fly via a
+<beginning of the code>notifications/tools/list_changed<end of the code>
+notification. Honoring this notification in the middle of a long conversation can cause an expensive cache miss.
+When possible, we handle configuration changes that happen mid-conversation by appending a new message to <beginning of the code>input<end of the code> to reflect the change rather than modifying an earlier message:
+If the sandbox configuration or approval mode changes, we
+insert
+a new <beginning of the code>role=developer<end of the code> message with the same format as the original <beginning of the code><permissions instructions><end of the code> item.
+If the current working directory changes, we
+insert
+a new <beginning of the code>role=user<end of the code> message with the same format as the original <beginning of the code><environment_context><end of the code>.
+We go to great lengths to ensure cache hits for performance. There’s another key resource we have to manage: the context window.
+Our general strategy to avoid running out of context window is to compact the conversation once the number of tokens exceeds some threshold. Specifically, we replace the <beginning of the code>input<end of the code> with a new, smaller list of items that is representative of the conversation, enabling the agent to continue with an understanding of what has happened thus far. An early
+implementation of compaction
+required the user to manually invoke the <beginning of the code>/compact<end of the code> command, which would query the Responses API using the existing conversation plus custom instructions for
+summarization
+. Codex used the resulting assistant message containing the summary
+as the new <beginning of the code>input<end of the code>
+for subsequent conversation turns.
+Since then, the Responses API has evolved to support a special
+<beginning of the code>/responses/compact<end of the code> endpoint
+that performs compaction more efficiently. It returns
+a list of items
+that can be used in place of the previous <beginning of the code>input<end of the code> to continue the conversation while freeing up the context window. This list includes a special <beginning of the code>type=compaction<end of the code> item with an opaque <beginning of the code>encrypted_content<end of the code> item that preserves the model’s latent understanding of the original conversation. Now, Codex automatically uses this endpoint to compact the conversation when the
+<beginning of the code>auto_compact_limit<end of the code>
+is exceeded.
+Coming next
+We’ve introduced the Codex agent loop and walked through how Codex crafts and manages its context when querying a model. Along the way, we highlighted practical considerations and best practices that apply to anyone building an agent loop on top of the Responses API.
+While the agent loop provides the foundation for Codex, it’s only the beginning. In upcoming posts, we’ll dig into the CLI’s architecture, explore how tool use is implemented, and take a closer look at Codex’s sandboxing model.
+</snippet><publish_time>2026年1月23日0时0分</publish_time><text_length>2556</text_length></document><document reference_id=""><title>Add persistent user preference recall across Codex CLI conversations</title><snippet>Add persistent user preference recall across Codex CLI conversations
+ChatGPT Feature requests
+codex, codex-cli
+sergeliatko
+June 19, 2026, 5:03am
+For most of what was mentioned, a good read of codex documentation would solve the issue. Briefly:
+Codex allows storing instructions (skills/agents) on 2 levels:
+globally in codex
+per repo
+Repeated prompts can be stored by you and reused however you need (do it just by stirring your files wherever you want, or use cool things like wisprflow snippets)
+External memory solutions like MCP servers, your own tools+instructions, etc.
+For simple memory I would look into something like MunninDB or “second brain” concept (many have it built as an MCP server).
+Codex custom instructions doc to read:
+Custom instructions with AGENTS.md – Codex | OpenAI Developers Custom instructions with AGENTS.md – Codex | OpenAI Developers</snippet><publish_time>2026年6月19日5时3分</publish_time><text_length>216</text_length></document><document reference_id="https://community.openai.com/t/extended-personal-memory-for-chatgpt-chatgpt-work-codex-build-prompt-testers/1391779/1"><title>Extended Personal Memory for ChatGPT, ChatGPT Work & Codex — Build Prompt + Testers</title><host>OpenAI Developer Community</host><snippet>I conceived a private, user-owned extended-memory system for ChatGPT, ChatGPT Work, and Codex, and used ChatGPT/Codex to develop the architecture, early local prototype source, and the complete build prompt below. I am sharing the specification—not my memories—so testers can reproduce it with fictional data and later, with explicit consent, their own accessible context or optional ChatGPT export.
+This is an independent experiment, not an OpenAI product. The core idea is to maintain specialized external memory regions and activate only those relevant to the current conversation. A small, cited packet enters the bounded working context; unrelated regions remain dormant.
+Current status: not a finished software product. Source exists for SQLite storage, lexical retrieval, lifecycle operations, an event log, readable exports, and a local MCP interface, but clean-install and actual MCP execution remain unverified. Cross-surface, semantic, graph, consolidation, advanced temporal, and quota tests are also unverified targets.
+The reference reproduction must use Codex → GPT-5.6 Sol → Effort: Ultra. This is non-negotiable: no silent downgrade; if unavailable, report <beginning of the code>unsupported<end of the code>. It is the author’s quality-first baseline, not proof that lower settings cannot run the architecture. API note: <beginning of the code>gpt-5.6-sol<end of the code> documents reasoning efforts through <beginning of the code>max<end of the code>; Ultra is a Codex setting, not an API value. Figure 1 — Conceptual analogy only, not OpenAI’s internal architecture. OpenAI does not document native memory as one literal fixed-capacity database or say it simply deletes the “least relevant” fact.
+The proposed system uses a brain-inspired design with specialized regions—for example projects, programming, travel, creative work, preferences, decisions, and unfinished ideas. For each request, a router activates every materially relevant region at a different weight, follows useful relationships, and merges their best-supported elements into one bounded packet. A topic change changes this active mix.Conceptual router activating three relevant memory domains at different strengths, keeping other domains dormant, and sending one bounded combined packet to ChatGPT. OpenAI’s current memory documentation also distinguishes ChatGPT web memory from the separate local memory used by Codex clients. Native memory is therefore a complementary recall layer here, not the canonical database.
+Retrieval brain: lexical search, optional semantic similarity, SQL filters, graph traversal, time, source quality, confidence...
+The system must provide brain-inspired, topic-routed, temporal, provenance-aware personal memory for ChatGPT, ChatGPT Work, and Codex without claiming to modify the model's native memory or context-window size. Use **Codex → GPT-5.6 Sol → Effort: Ultra**. Do not substitute another model or lower Codex effort. If unavailable, report `unsupported` and stop. This is the reference baseline. 5. Before real import or durable writes, explain boundaries and obtain a revocable mode: `retrieval-only`, `review-before-write` (default), or `automatic-write-within-approved-scope`.
+1. **Working:** bounded request, conversation state, and retrieved packet.
+2. **Episodic:** dated conversations, events, and milestones.
+3. **Semantic/domain:** durable facts, preferences, decisions, constraints, and consolidated user-specific regions.
+4. **Procedural:** reusable rules, methods, and workflows.
+5. **Prospective:** future intentions/actions with validity dates.
+6. **Temporal/version:** event, learning, validity, change, and confirmation times.
+7. **Relationship:** entities and typed links forming a personal graph.
+8. **Unresolved:** incomplete projects, questions, blockers, failures, and next actions.
+9. **Archive/views:** optional immutable sources plus generated non-canonical Markdown/text views.
+10. **Meta-memory/Router:** maps regions and allocates context.
+11. **Writer/Consolidator:** adds, corrects, archives, deduplicates, links, and re-ranks.
+Support a **shadow mode** that retrieves and scores without injecting memories into the answer. Add a **context governor** that suppresses unnecessary retrieval, enforces local record/token/call/latency budgets, and monitors or stops remote usage only where the platform exposes usable controls.
+Native ChatGPT memory, when available in the current ChatGPT surface, remains a complementary recall layer. Do not treat it as interchangeable with the external store; ChatGPT web and local Codex memory may be separate systems.
+
+### D. Canonical data model
+Use a local SQLite database as the source of truth. Add migrations and indexes. At minimum, each memory record must support:
+
+- `id`
+- `user_scope`
+- `access_scope`: local_only, remote_allowed, or workspace_allowed
+- `authorized_principal_id` and `authorized_workspace_id` where applicable
+- `domain`
+- `type`
+- `statement`
+- `status`: current, historical, partial, disputed, superseded, or archived
+- `confidence`
+- `importance`
+- `source`
+- `source_reference`
+- `evidence`
+- `content_hash`
+- `explicitness`: explicit, inferred, or consolidated
+- `tags`
+- `created_at`
+- `updated_at`
+- `event_time`
+- `learned_at`
+- `observed_at`
+- `valid_from`
+- `valid_until`
+- `last_confirmed_at`
+- `supersedes_id`
+- `archived_reason`
+- `sensitivity`
+- `retrieval_count`
+- `last_retrieved_at`
+Store evidence as a minimal source pointer and integrity hash whenever possible, not a duplicate conversation. `event_time` is when the event occurred; `observed_at` is when the source was accessed; `learned_at` is when the memory entered the store. For one user, use one fixed `user_scope`; for multiple users, authenticate and enforce user/ACL scope everywhere—otherwise do not claim multi-user isolation.
+Create separate normalized structures for:
+
+- conversations/source documents;
+- entities;
+- memory-to-entity links;
+- typed memory relationships;
+- projects and project states;
+- decisions;
+- unresolved items;
+- append-only lifecycle events;
+- retrieval feedback and benchmark measurements.
+Suggested memory types include:
+
+- FACT
+- PREFERENCE
+- DECISION
+- PROJECT
+- PROJECT_STATE
+- GOAL
+- CONSTRAINT
+- DISCOVERY
+- WORKFLOW
+- SUCCESSFUL_APPROACH
+- FAILED_APPROACH
+- OPEN_QUESTION
+- NEXT_ACTION
+- USER_CORRECTION
+### E. Source ingestion
+
+Use sources in this order, only when genuinely accessible:
+
+1. explicit statements in the current conversation;
+2. native memory/history exposed by the current surface;
+3. existing local Codex memories or authorized local files;
+4. user-supplied conversations and documents;
+5. optional ChatGPT data export.
+
+When importing a large archive, require explicit source scope and size limits, preserve the original files unchanged, and begin with a dry run. Perform distinct passes:
+
+1. inventory conversations, dates, domains, projects, entities, decisions, and outcomes;
+2. extract granular candidates with multiple domain probabilities;
+3. deduplicate and detect contradictions/temporal changes;
+4. link entities, sources, projects, decisions, unresolved items, and next actions;
+5. assign provenance, confidence, importance, sensitivity, and validity, then review low-confidence/sensitive inferences.
+
+The review report must show proposed additions, corrections, exclusions, sensitivity flags, and estimated storage/context impact. Commit only approved scope in a transaction, keep an import manifest, and provide rollback for the entire import batch.
+
+Never turn a guess or unstable external fact into a durable personal memory. Direct user statements outrank inferred summaries, and newer explicit corrections outrank older statements.
+
+### F. Domain discovery and brain-region router
+Do not impose a universal domain list. Discover domains from the user's actual history and allow them to evolve.
+For every domain, store its description, keywords/synonyms, optional semantic representation, related domains, exclusions/overlap rules, activation priority, retrieval depth, and token allocation.
+In shadow mode, perform retrieval and ranking entirely inside the local process. Do not return memory text in an MCP/tool response and do not inject it into model context. Store only local memory IDs, scores, latency, and sanitized aggregate measurements unless the user explicitly authorizes more.
+### H. Temporal memory and activation decay
+
+The system must answer current-state and historical questions differently.
+
+Required behavior:
+
+1. Newer explicit statements may supersede older ones, but never erase their historical evidence.
+2. Corrections create a new record and a version link.
+3. `valid_from` and `valid_until` determine when a statement applies.
+4. Recency decay changes retrieval priority; it does not silently delete history.
+5. Explicit high-importance durable preferences resist decay.
+6. Frequently confirmed memories may gain activation strength without becoming more certain than their evidence supports.
+7. Dormant or cold memories remain searchable through deep retrieval.
+8. Archived memories are excluded from ordinary and deep retrieval; only explicit archive-management or restore operations may access them.
+9. Every state change is recorded in the append-only event log.
+
+Track `event_time`, `learned_at`, `valid_from`, `valid_until`, and `last_confirmed_at` separately so the system can distinguish when something happened, when the assistant learned it, when it was true, and when it was last verified.
+
+Implement hot, warm, and cold activation tiers:
+
+- **Hot:** active session, current project state, immediate constraints.
+- **Warm:** durable or recently useful domain memories.
+- **Cold:** historical, rarely used, or superseded material available for deliberate deep search; archived material is outside activation tiers.
+
+### I. Automatic Memory Writer and consolidation
+
+After meaningful conversations, run or propose a writer pass that classifies each candidate as:
+
+- `ADD`
+- `CORRECT/SUPERSEDE`
+- `ARCHIVE`
+- `NO_CHANGE`
+
+Respect the onboarding mode: make no durable changes in `retrieval-only`; stage every candidate for approval in `review-before-write`; and in `automatic-write-within-approved-scope`, write only non-sensitive, high-confidence records inside the user's approved domains and access scopes.
+
+Before mutation, search duplicates; inspect conflicts/history; mark explicit versus inferred; reject credentials, secrets, chatter, temporary moods, and unsupported conclusions; assign all metadata/links; require approval for sensitive or ambiguous additions; and log the decision/evidence.
+
+Periodically merge redundant wording without losing evidence, create summaries linked to granular sources, promote recurring constraints, lower stale activation, flag unresolved conflicts, update domains/links, and refresh views. Never rewrite the immutable archive.
+
+Controlled consolidation must require adequate evidence—or user approval—before promoting repeated episodes or inferred summaries into durable semantic facts.
+
+### J. MCP operations
+
+Implement and test these required operations:
+
+1. `memory_search`
+2. `memory_get`
+3. `memory_list`
+4. `memory_status`
+5. `memory_add`
+6. `memory_correct`
+7. `memory_archive`
+8. `memory_restore`
+9. `memory_export_markdown`
+
+Operations 10–19 are optional for the locally functional core and required for locally complete advanced status:
+
+`memory_import`
+17. `memory_backup`
+18. `memory_record_feedback`
+`memory_benchmark`
+20. `memory_purge` (mandatory maintenance workflow; separately confirmed and never bundled with archive; expose as an MCP tool only if its confirmation boundary is reliable)
+
+Annotate read-only and mutating tools correctly. Validate schemas, enforce ACLs/limits, and return provenance. `memory_export_markdown` and `memory_search_conversations` must be local-only and filtered by default; never return bulk exports or raw transcripts to a remote caller.
+
+### K. Surface integration
+#### Codex
+
+- For local Codex, package local skills/plugin, register the `stdio` MCP server, reload, and prove real operations from a new task.
+- Cloud Codex cannot use the user's local `stdio` process directly; require a verified private remote path or report it blocked/unsupported.
+
+the same surface with native/local memory plus the extended store.
+**Local core:** create schema/migrations, event log, fictional fixtures, backups, exports, MCP server, and the nine required tools.
+**Retrieval brain:** add discovered domains, multi-domain routing, hybrid search, budgets, temporal queries, graph links, and unresolved-project views.
+**Codex:** install locally, reload, and prove real MCP calls from a new task.
+- **Locally complete advanced:** the core plus operations 10–19, semantic retrieval, graph traversal, writer/consolidation, advanced temporal/unresolved behavior, and controlled local benchmark.
+- **Cross-surface complete:** the locally complete advanced system plus real scoped retrieval and mutation tests from ChatGPT, ChatGPT Work, and Codex. </snippet><url>https://community.openai.com/t/extended-personal-memory-for-chatgpt-chatgpt-work-codex-build-prompt-testers/1391779/1</url><publish_time>2026年9月9日2时16分</publish_time><text_length>2241</text_length></document></search>

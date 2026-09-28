@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>CodeCLI 架构图</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; padding: 40px; }
+h1 { text-align: center; margin-bottom: 40px; color: #58a6ff; font-size: 28px; }
+.diagram { max-width: 1100px; margin: 0 auto; }
+.layer { margin-bottom: 20px; border: 1px solid #30363d; border-radius: 12px; padding: 20px; background: #161b22; }
+.layer-title { font-size: 14px; font-weight: 700; color: #8b949e; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 14px; border-bottom: 1px solid #21262d; padding-bottom: 8px; }
+.modules { display: flex; flex-wrap: wrap; gap: 10px; }
+.module { background: #21262d; border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; min-width: 140px; flex: 1; }
+.module-name { font-weight: 700; color: #58a6ff; font-size: 14px; margin-bottom: 4px; }
+.module-desc { font-size: 12px; color: #8b949e; line-height: 1.4; }
+.arrow { text-align: center; color: #30363d; font-size: 24px; margin: 8px 0; }
+.arrow-down::after { content: "▼"; }
+.arrow-down-split::after { content: "▼ ▼ ▼"; letter-spacing: 16px; }
+.row { display: flex; gap: 20px; }
+.row > .layer { flex: 1; }
+.highlight { border-color: #58a6ff !important; }
+.tag { display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px; }
+.tag-stub { background: #3d2b00; color: #e3b341; }
+.tag-missing { background: #3d1a1a; color: #f85149; }
+.tag-ok { background: #1a3d2b; color: #3fb950; }
+.footer { text-align: center; margin-top: 40px; color: #484f58; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>CodeCLI 架构图</h1>
+
+<div class="diagram">
+
+<!-- Layer 1: Entry -->
+<div class="layer highlight">
+  <div class="layer-title">Entry Layer — 入口层</div>
+  <div class="modules">
+    <div class="module"><div class="module-name">cli.py</div><div class="module-desc">Typer CLI 入口<br>参数解析、模式分发</div></div>
+    <div class="module"><div class="module-name">repl.py</div><div class="module-desc">REPL 交互循环<br>20+ 斜杠命令<br>权限模式切换</div></div>
+    <div class="module"><div class="module-name">model_selector.py</div><div class="module-desc">交互式模型选择<br>添加/删除自定义模型</div></div>
+  </div>
+</div>
+
+<div class="arrow arrow-down"></div>
+
+<!-- Layer 2: Agent -->
+<div class="layer highlight">
+  <div class="layer-title">Agent Layer — 智能体核心</div>
+  <div class="modules">
+    <div class="module"><div class="module-name">agent.py</div><div class="module-desc">Agent 主体<br>ReAct 循环<br>技能匹配+注入</div></div>
+    <div class="module"><div class="module-name">orchestrator.py</div><div class="module-desc">多 Agent 编排<br>Team 模式<br>Worker 分发</div></div>
+    <div class="module"><div class="module-name">plan_execute.py</div><div class="module-desc">Plan 模式<br>DAG 任务分解<br>并行执行</div></div>
+    <div class="module"><div class="module-name">query.py</div><div class="module-desc">单次查询<br>上下文压缩<br>Token 预算</div></div>
+    <div class="module"><div class="module-name">agent_runner.py</div><div class="module-desc">Agent 运行器<br>Runtime API 用</div></div>
+  </div>
+</div>
+
+<div class="arrow arrow-down"></div>
+
+<!-- Layer 3: Infrastructure -->
+<div class="row">
+  <div class="layer">
+    <div class="layer-title">LLM Layer — 模型调用</div>
+    <div class="modules">
+      <div class="module"><div class="module-name">factory.py</div><div class="module-desc">按 provider<br>创建客户端</div></div>
+      <div class="module"><div class="module-name">openai_compatible.py</div><div class="module-desc">OpenAI 兼容<br>流式 SSE<br>Tool Calls</div></div>
+      <div class="module"><div class="module-name">pricing.py</div><div class="module-desc">Token 计价</div></div>
+      <div class="module"><div class="module-name">model_profiles.py</div><div class="module-desc">模型配置<br>自定义存储</div></div>
+    </div>
+  </div>
+
+  <div class="layer">
+    <div class="layer-title">Tool Layer — 工具系统</div>
+    <div class="modules">
+      <div class="module"><div class="module-name">builtins.py</div><div class="module-desc">20+ 内置工具<br>文件/搜索/Shell</div></div>
+      <div class="module"><div class="module-name">registry.py</div><div class="module-desc">工具注册表</div></div>
+      <div class="module"><div class="module-name">executor.py</div><div class="module-desc">并发/串行执行<br>审批流程</div></div>
+      <div class="module"><div class="module-name">file_ops.py</div><div class="module-desc">文件操作 <span class="tag tag-missing">缺失</span></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow arrow-down-split"></div>
+
+<!-- Layer 4: Domain Services -->
+<div class="layer">
+  <div class="layer-title">Domain Services — 领域服务</div>
+  <div class="modules">
+    <div class="module"><div class="module-name">config/</div><div class="module-desc">配置加载<br>三级合并<br>环境变量覆盖</div></div>
+    <div class="module"><div class="module-name">memory/</div><div class="module-desc">长期记忆<br>SQLite 存储<br>相关性召回</div></div>
+    <div class="module"><div class="module-name">skill/</div><div class="module-desc">技能系统<br>发现/匹配/注入<br>SKILL.md</div></div>
+    <div class="module"><div class="module-name">rag/</div><div class="module-desc">代码索引<br>SQLite 搜索<br>全项目扫描</div></div>
+    <div class="module"><div class="module-name">snapshot/</div><div class="module-desc">工作区快照<br>创建/恢复</div></div>
+    <div class="module"><div class="module-name">policy/</div><div class="module-desc">安全策略<br>命令/路径守卫<br>审计日志</div></div>
+    <div class="module"><div class="module-name">context/</div><div class="module-desc">上下文压缩<br>Token 预算</div></div>
+    <div class="module"><div class="module-name">prompt/</div><div class="module-desc">提示词组装<br>静态+动态</div></div>
+    <div class="module"><div class="module-name">render/</div><div class="module-desc">终端渲染<br>Rich/Plain</div></div>
+    <div class="module"><div class="module-name">image/</div><div class="module-desc">图片处理<br>base64 编码</div></div>
+    <div class="module"><div class="module-name">plan/</div><div class="module-desc">任务规划<br>DAG 模型</div></div>
+    <div class="module"><div class="module-name">web/</div><div class="module-desc">Web 访问 <span class="tag tag-stub">Stub</span></div></div>
+    <div class="module"><div class="module-name">mcp/</div><div class="module-desc">MCP 客户端 <span class="tag tag-missing">未实现</span></div></div>
+    <div class="module"><div class="module-name">lsp/</div><div class="module-desc">语法检查</div></div>
+  </div>
+</div>
+
+<div class="arrow arrow-down"></div>
+
+<!-- Layer 5: Foundation -->
+<div class="layer">
+  <div class="layer-title">Foundation — 基础层</div>
+  <div class="modules">
+    <div class="module"><div class="module-name">types.py</div><div class="module-desc">Message, Usage, QueryResult</div></div>
+    <div class="module"><div class="module-name">bootstrap.py</div><div class="module-desc">应用启动配置</div></div>
+    <div class="module"><div class="module-name">runtime/</div><div class="module-desc">任务队列 + HTTP API</div></div>
+  </div>
+</div>
+
+</div>
+
+<div class="footer">
+  CodeCLI v0.1.0 — Python 3.13+ — ReAct Agent with Tool Use
+</div>
+
+</body>
+</html>
