@@ -11,6 +11,8 @@ from codecli.config.config import CodeCliConfig
 from codecli.context.manager import ContextWindowManager, ContextBudget
 from codecli.image.processor import parse_image_references
 from codecli.llm.base import LlmClient
+from codecli.memory.auto_memory import AutoMemoryStore
+from codecli.memory.extractor import ExtractState, run_extraction
 from codecli.prompt.assembler import PromptAssembler
 from codecli.skill.registry import SkillContextBuffer, SkillRegistry
 from codecli.snapshot.service import SnapshotService
@@ -59,6 +61,7 @@ class Agent:
 
         self.last_usage = Usage()
         self.last_cost: dict[str, Any] = {}
+        self._completed_ok = False
 
         self._validate_config()
 
@@ -92,6 +95,7 @@ class Agent:
         with suppress(Exception):
             snapshot.create("pre-turn")
 
+        self._completed_ok = False
         try:
             if self.mode == "plan":
                 async for event in self._run_plan(message):
@@ -105,6 +109,9 @@ class Agent:
         finally:
             with suppress(Exception):
                 snapshot.create("post-turn")
+            if getattr(self, "_completed_ok", False):
+                with suppress(Exception):
+                    await self._maybe_extract()
 
     async def run_complete(self, message: str) -> QueryResult:
         text = ""
@@ -163,17 +170,46 @@ class Agent:
 
         tool_defs = self.tool_registry.definitions()
         executor = ToolExecutor(self.tool_registry)
+
+        # --- Auto Memory (Claude Code style) ---------------------------------
+        # Index + side-call selection happen once per user turn (this method is
+        # one queryLoop invocation), exactly like Claude Code's prefetch.
+        memory_dir: str | None = None
+        memory_block = ""
+        if self.config.features.memory and self.config.auto_memory.enabled:
+            store = AutoMemoryStore(
+                self.config.auto_memory.root,
+                self.cwd,
+                max_index_lines=self.config.auto_memory.max_index_lines,
+                max_index_bytes=self.config.auto_memory.max_index_bytes,
+                max_index_line_chars=self.config.auto_memory.max_index_line_chars,
+                max_selected_files=self.config.auto_memory.recall_max_files,
+            )
+            memory_dir = str(store.memory_dir)
+            selected: list = []
+            if store.exists() and self.config.auto_memory.sidecall_enabled:
+                selected = await store.select_relevant_memories(
+                    original,
+                    self.llm_client,
+                    recent_tools=_recent_tool_names(self.history),
+                    max_files=self.config.auto_memory.recall_max_files,
+                )
+            memory_block = assembler.build_memory_context(store, selected)
+
         context = ToolContext(
             cwd=self.cwd,
             config=self.config,
             approval_callback=self.approval_callback,
             skill_context_buffer=self.skill_context_buffer,
+            memory_dir=memory_dir,
         )
 
         # Build the dynamic part of the system prompt (tool list, cwd, etc.).
         dynamic_prompt = assembler.build_dynamic(original)
 
-        effective_system = f"{self.system_prompt}\n\n{dynamic_prompt}".strip()
+        effective_system = (
+            f"{self.system_prompt}\n\n{dynamic_prompt}\n\n{memory_block}".strip()
+        )
 
         # Context-window manager for history compression.
         context_manager = ContextWindowManager(
@@ -319,6 +355,7 @@ class Agent:
         if costs:
             done_event["cost"] = costs
             self.last_cost = costs
+        self._completed_ok = True
         yield done_event
 
     async def _run_plan(self, message: str) -> AsyncIterator[dict[str, Any]]:
@@ -337,6 +374,7 @@ class Agent:
                 self.history = list(event.get("messages") or [])
                 self.last_usage = Usage.from_mapping(event.get("usage") or {})
                 self.last_cost = dict(event.get("cost") or {})
+                self._completed_ok = True
             yield event
 
     async def _run_team(self, message: str) -> AsyncIterator[dict[str, Any]]:
@@ -354,7 +392,26 @@ class Agent:
                 self.history = list(event.get("messages") or [])
                 self.last_usage = Usage.from_mapping(event.get("usage") or {})
                 self.last_cost = dict(event.get("cost") or {})
+                self._completed_ok = True
             yield event
+
+    async def _maybe_extract(self) -> None:
+        """Register the session and trigger the post-session extractor when
+        the Auto Dream double gate is met. Never raises into the session."""
+        if not (self.config.features.memory and self.config.auto_memory.enabled):
+            return
+        state = ExtractState(self.config.auto_memory.root, self.cwd).load()
+        state.register_session()
+        if not state.should_extract(self.config):
+            return
+        await run_extraction(
+            self.cwd,
+            self.config,
+            self.llm_client,
+            self.history,
+            registry=self.tool_registry,
+            force=False,
+        )
 
     def _validate_config(self) -> None:
         if not self.config.llm.api_key:
@@ -369,6 +426,23 @@ class Agent:
                 "Set a CODECLI_CONTEXT_WINDOW environment variable or configure "
                 "it in ~/.codecli/config.json."
             )
+
+def _recent_tool_names(history: list[Message], max_items: int = 5) -> list[str]:
+    """Collect recently used tool names from prior assistant turns, newest
+    first — fed to the memory recall side-call so it can skip tool API docs."""
+    names: list[str] = []
+    for msg in reversed(history or []):
+        if msg.role != "assistant" or not msg.tool_calls:
+            continue
+        for call in msg.tool_calls:
+            function = call.get("function") if isinstance(call.get("function"), dict) else {}
+            name = str(function.get("name") or "")
+            if name and name not in names:
+                names.append(name)
+            if len(names) >= max_items:
+                return names
+    return names
+
 
 def _prepend_skill_candidates(user_message: str, cwd: str, config: CodeCliConfig) -> str:
     if not config.features.skill:

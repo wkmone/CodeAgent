@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from codecli.lsp import diagnose_file
-from codecli.policy.path_guard import PathGuard
+from codecli.policy.path_guard import PathGuard, PathPolicyError
 
 
 # ---------------------------------------------------------------------------
@@ -39,10 +39,35 @@ SKIP_DIRS = frozenset({".git", ".venv", "node_modules", "dist", "build", "target
 MAX_FILE_SIZE = 1_000_000  # 1 MB
 
 
-def resolve_path(cwd: str, value: str, path_guard_enabled: bool = True) -> Path:
-    """Resolve *value* against workspace root *cwd*, optionally enforcing the path guard."""
+def resolve_path(
+    cwd: str,
+    value: str,
+    path_guard_enabled: bool = True,
+    extra_roots: tuple[str | Path, ...] = (),
+) -> Path:
+    """Resolve *value* against workspace root *cwd*, optionally enforcing the
+    path guard.
+
+    *extra_roots* (e.g. the Auto Memory directory) are additional allowed
+    roots; a path inside any of them is permitted when the guard is enabled.
+    """
     if path_guard_enabled:
-        return PathGuard(cwd).validate(value)
+        try:
+            return PathGuard(cwd).validate(value)
+        except PathPolicyError:
+            if extra_roots:
+                candidate = Path(value)
+                if not candidate.is_absolute():
+                    candidate = Path(cwd).resolve() / candidate
+                resolved = candidate.resolve()
+                for root in extra_roots:
+                    root_path = Path(root).resolve()
+                    try:
+                        resolved.relative_to(root_path)
+                    except ValueError:
+                        continue
+                    return resolved
+            raise
     path = Path(value)
     return path if path.is_absolute() else Path(cwd).resolve() / path
 
@@ -74,12 +99,13 @@ def read_file(
     offset: int = 1,
     limit: int = 500,
     path_guard_enabled: bool = True,
+    extra_roots: tuple[str | Path, ...] = (),
 ) -> FileOpResult:
     """Return numbered lines from a text file.
 
     *offset* is 1-based; *limit* caps the returned lines.
     """
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path, path_guard_enabled, extra_roots=extra_roots)
     if not resolved.is_file():
         return FileOpResult(f"Not a file: {resolved}", is_error=True)
 
@@ -103,9 +129,10 @@ def read_file_raw(
     path: str,
     *,
     path_guard_enabled: bool = True,
+    extra_roots: tuple[str | Path, ...] = (),
 ) -> FileOpResult:
     """Return raw (un-numbered) file content — useful for LLM consumption."""
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path, path_guard_enabled, extra_roots=extra_roots)
     if not resolved.is_file():
         return FileOpResult(f"Not a file: {resolved}", is_error=True)
     try:
@@ -128,13 +155,14 @@ def write_file(
     append: bool = False,
     path_guard_enabled: bool = True,
     run_diagnostics: bool = True,
+    extra_roots: tuple[str | Path, ...] = (),
 ) -> FileOpResult:
     """Write (or append) *content* to *path*.
 
     When *run_diagnostics* is True (default) Python files will be
     syntax-checked and results appended to the returned message.
     """
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path, path_guard_enabled, extra_roots=extra_roots)
     encoded = content.encode("utf-8")
     if len(encoded) > 5 * 1024 * 1024:
         return FileOpResult("write_file rejected: content exceeds 5 MB", is_error=True)
@@ -168,6 +196,7 @@ def edit_file(
     *,
     path_guard_enabled: bool = True,
     dry_run: bool = False,
+    extra_roots: tuple[str | Path, ...] = (),
 ) -> FileOpResult:
     """Replace the first occurrence of *old_text* with *new_text* in *path*.
 
@@ -175,7 +204,7 @@ def edit_file(
     content (not line-based), which makes it suitable for structured edits.
     When *dry_run* is True the diff is returned without modifying the file.
     """
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path, path_guard_enabled, extra_roots=extra_roots)
     if not resolved.is_file():
         return FileOpResult(f"Not a file: {resolved}", is_error=True)
 
@@ -248,9 +277,10 @@ def list_directory(
     path: str,
     *,
     path_guard_enabled: bool = True,
+    extra_roots: tuple[str | Path, ...] = (),
 ) -> FileOpResult:
     """List entries in a directory, directories marked with a trailing ``/``."""
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path, path_guard_enabled, extra_roots=extra_roots)
     if not resolved.is_dir():
         return FileOpResult(f"Not a directory: {resolved}", is_error=True)
 
@@ -277,10 +307,35 @@ def glob_files(
     pattern: str,
     *,
     limit: int = 100,
+    extra_roots: tuple[str | Path, ...] = (),
 ) -> FileOpResult:
-    """Find files matching *pattern* relative to *cwd*."""
+    """Find files matching *pattern* relative to *cwd* (or an extra root).
+
+    Absolute patterns are allowed only when they point inside *extra_roots*
+    (e.g. the Auto Memory directory), so the model can glob memory files.
+    """
     root = Path(cwd).resolve()
-    if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+    raw_pattern = Path(os.path.expanduser(pattern))
+    if raw_pattern.is_absolute():
+        for extra_root in extra_roots:
+            extra = Path(extra_root).resolve()
+            try:
+                raw_pattern.resolve().relative_to(extra)
+            except ValueError:
+                continue
+            matches = glob_module.glob(str(raw_pattern), recursive=True)
+            rels: list[str] = []
+            for match in sorted(matches):
+                mp = Path(match).resolve()
+                try:
+                    rels.append(str(mp.relative_to(extra)))
+                except ValueError:
+                    continue
+                if len(rels) >= limit:
+                    break
+            return FileOpResult("\n".join(rels) or "(no matches)")
+        return FileOpResult("glob pattern must stay inside workspace", is_error=True)
+    if ".." in raw_pattern.parts:
         return FileOpResult("glob pattern must stay inside workspace", is_error=True)
 
     matches = glob_module.glob(str(root / pattern), recursive=True)
@@ -307,12 +362,13 @@ def directory_tree(
     max_depth: int = 3,
     path_guard_enabled: bool = True,
     exclude_patterns: tuple[str, ...] | None = None,
+    extra_roots: tuple[str | Path, ...] = (),
 ) -> FileOpResult:
     """Return a recursive tree view of files and directories.
 
     *max_depth* limits recursion depth to avoid excessive output.
     """
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path, path_guard_enabled, extra_roots=extra_roots)
     if not resolved.is_dir():
         return FileOpResult(f"Not a directory: {resolved}", is_error=True)
 
@@ -361,6 +417,7 @@ def grep(
     limit: int = 100,
     use_regex: bool = True,
     path_guard_enabled: bool = True,
+    extra_roots: tuple[str | Path, ...] = (),
 ) -> FileOpResult:
     """Search file contents inside *path* (default: workspace root).
 
@@ -368,7 +425,7 @@ def grep(
     expression; otherwise a plain substring match is performed.
     """
     root = Path(cwd).resolve()
-    start = resolve_path(cwd, path, path_guard_enabled)
+    start = resolve_path(cwd, path, path_guard_enabled, extra_roots=extra_roots)
 
     try:
         compiled = re.compile(pattern) if use_regex else None
@@ -406,9 +463,10 @@ def get_file_info(
     path: str,
     *,
     path_guard_enabled: bool = True,
+    extra_roots: tuple[str | Path, ...] = (),
 ) -> FileOpResult:
     """Return detailed metadata about a file or directory."""
-    resolved = resolve_path(cwd, path, path_guard_enabled)
+    resolved = resolve_path(cwd, path, path_guard_enabled, extra_roots=extra_roots)
     if not resolved.exists():
         return FileOpResult(f"Path does not exist: {resolved}", is_error=True)
 

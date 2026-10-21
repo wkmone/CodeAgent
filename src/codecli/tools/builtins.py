@@ -4,7 +4,6 @@ import asyncio
 import os
 from typing import Any
 
-from codecli.memory import MemoryManager
 from codecli.policy import CommandGuard
 from codecli.rag import CodeIndex
 from codecli.skill import SkillRegistry
@@ -247,56 +246,6 @@ def get_builtin_tools() -> list[Tool]:
             handler=_web_fetch,
         ),
         Tool(
-            name="save_memory",
-            description=(
-                "Save an explicit or durable fact to long-term project memory. Use only for stable "
-                "preferences, project constraints, user corrections, or reusable decisions; never "
-                "store secrets, temporary task state, raw logs, or uncertain claims."
-            ),
-            parameters=object_schema(
-                {
-                    "content": {"type": "string", "description": "Durable fact to remember"},
-                    "kind": {
-                        "type": "string",
-                        "enum": ["fact", "preference", "constraint", "correction", "decision"],
-                    },
-                    "importance": {"type": "number", "description": "Score from 0 to 1"},
-                    "confidence": {"type": "number", "description": "Score from 0 to 1"},
-                    "expires_at": {
-                        "type": "string",
-                        "description": "Optional ISO-8601 expiry for time-sensitive memory",
-                    },
-                },
-                ["content"],
-            ),
-            required_keys=["content"],
-            handler=_save_memory,
-            is_read_only=False,
-            is_concurrency_safe=False,
-            danger_level="medium",
-        ),
-        Tool(
-            name="search_memory",
-            description=(
-                "Search relevance-ranked long-term project memory when prior preferences, "
-                "corrections, constraints, or decisions may matter."
-            ),
-            parameters=object_schema(
-                {
-                    "query": {"type": "string", "description": "What to recall"},
-                    "limit": {"type": "number", "description": "Maximum results"},
-                    "kinds": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional memory kinds",
-                    },
-                },
-                ["query"],
-            ),
-            required_keys=["query"],
-            handler=_search_memory,
-        ),
-        Tool(
             name="load_skill",
             description="Load a named CodeCLI skill manual from user/project skill directories.",
             parameters=object_schema(
@@ -380,6 +329,11 @@ def get_builtin_tools() -> list[Tool]:
 # ---------------------------------------------------------------------------
 
 
+def _extra_roots(context: ToolContext) -> tuple[str, ...]:
+    """Auto Memory directory is an additional allowed root for file tools."""
+    return (context.memory_dir,) if context.memory_dir else ()
+
+
 async def _read_file(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     result: FileOpResult = fops.read_file(
         context.cwd,
@@ -387,6 +341,7 @@ async def _read_file(payload: dict[str, Any], context: ToolContext) -> ToolResul
         offset=int(payload.get("offset") or 1),
         limit=int(payload.get("limit") or 500),
         path_guard_enabled=context.config.policy.path_guard_enabled,
+        extra_roots=_extra_roots(context),
     )
     return _to_tool_result(result)
 
@@ -398,6 +353,7 @@ async def _write_file(payload: dict[str, Any], context: ToolContext) -> ToolResu
         str(payload["content"]),
         append=bool(payload.get("append")),
         path_guard_enabled=context.config.policy.path_guard_enabled,
+        extra_roots=_extra_roots(context),
     )
     return _to_tool_result(result)
 
@@ -410,6 +366,7 @@ async def _edit_file(payload: dict[str, Any], context: ToolContext) -> ToolResul
         str(payload["new_text"]),
         path_guard_enabled=context.config.policy.path_guard_enabled,
         dry_run=bool(payload.get("dry_run")),
+        extra_roots=_extra_roots(context),
     )
     return _to_tool_result(result)
 
@@ -419,6 +376,7 @@ async def _list_dir(payload: dict[str, Any], context: ToolContext) -> ToolResult
         context.cwd,
         str(payload["path"]),
         path_guard_enabled=context.config.policy.path_guard_enabled,
+        extra_roots=_extra_roots(context),
     )
     return _to_tool_result(result)
 
@@ -428,6 +386,7 @@ async def _glob_files(payload: dict[str, Any], _context: ToolContext) -> ToolRes
         _context.cwd,
         str(payload["pattern"]),
         limit=int(payload.get("limit") or 100),
+        extra_roots=_extra_roots(_context),
     )
     return _to_tool_result(result)
 
@@ -440,6 +399,7 @@ async def _grep(payload: dict[str, Any], context: ToolContext) -> ToolResult:
         limit=int(payload.get("limit") or 100),
         use_regex=bool(payload.get("regex", True)),
         path_guard_enabled=context.config.policy.path_guard_enabled,
+        extra_roots=_extra_roots(context),
     )
     return _to_tool_result(result)
 
@@ -451,6 +411,7 @@ async def _directory_tree(payload: dict[str, Any], context: ToolContext) -> Tool
         max_depth=int(payload.get("max_depth") or 3),
         path_guard_enabled=context.config.policy.path_guard_enabled,
         exclude_patterns=tuple(payload.get("exclude_patterns") or ()),
+        extra_roots=_extra_roots(context),
     )
     return _to_tool_result(result)
 
@@ -460,6 +421,7 @@ async def _get_file_info(payload: dict[str, Any], context: ToolContext) -> ToolR
         context.cwd,
         str(payload["path"]),
         path_guard_enabled=context.config.policy.path_guard_enabled,
+        extra_roots=_extra_roots(context),
     )
     return _to_tool_result(result)
 
@@ -523,62 +485,6 @@ async def _web_fetch(payload: dict[str, Any], _context: ToolContext) -> ToolResu
     except Exception as exc:  # noqa: BLE001
         return ToolResult(f"Fetch error: {exc}", is_error=True)
     return ToolResult(content, display_summary=f"Fetched {payload['url']}")
-
-
-# ---------------------------------------------------------------------------
-# Handler: memory
-# ---------------------------------------------------------------------------
-
-
-async def _save_memory(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    if not context.config.features.memory or not context.config.memory.long_term_enabled:
-        return ToolResult("Long-term memory is disabled.", is_error=True)
-    manager = MemoryManager(
-        context.config.memory.long_term_db_path,
-        scope=context.cwd,
-        max_entries=context.config.memory.max_long_term_entries,
-        max_content_length=context.config.memory.max_memory_chars,
-    )
-    memory_id = manager.save(
-        str(payload["content"]),
-        kind=str(payload.get("kind") or "fact"),
-        source="agent",
-        importance=float(payload.get("importance", 0.5)),
-        confidence=float(payload.get("confidence", 1.0)),
-        expires_at=payload.get("expires_at"),
-    )
-    return ToolResult(f"Saved memory #{memory_id}")
-
-
-async def _search_memory(payload: dict[str, Any], context: ToolContext) -> ToolResult:
-    if not context.config.features.memory or not context.config.memory.long_term_enabled:
-        return ToolResult("Long-term memory is disabled.", is_error=True)
-    raw_kinds = payload.get("kinds")
-    if raw_kinds is not None and not isinstance(raw_kinds, list):
-        return ToolResult("search_memory kinds must be an array of strings.", is_error=True)
-    manager = MemoryManager(
-        context.config.memory.long_term_db_path,
-        scope=context.cwd,
-        max_entries=context.config.memory.max_long_term_entries,
-        max_content_length=context.config.memory.max_memory_chars,
-    )
-    rows = manager.recall(
-        str(payload["query"]),
-        limit=int(payload.get("limit") or context.config.memory.recall_limit),
-        kinds=[str(kind) for kind in raw_kinds] if raw_kinds else None,
-        min_score=context.config.memory.recall_min_score,
-    )
-    if not rows:
-        return ToolResult("(no relevant long-term memory)")
-    content = "\n".join(
-        f"#{row.id} [{row.kind}, importance={row.importance:.2f}] {row.content}" for row in rows
-    )
-    return ToolResult(content, display_summary=f"Recalled {len(rows)} memories")
-
-
-# Keep the original handler imports working for SDK users and existing tests.
-save_memory = _save_memory
-search_memory = _search_memory
 
 
 # ---------------------------------------------------------------------------

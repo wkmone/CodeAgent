@@ -19,7 +19,7 @@ from codecli.config.config import CodeCliConfig, config_to_public_dict
 from codecli.entry.model_selector import ModelSelectorState, run_model_selector
 from codecli.llm.factory import create_llm_client
 from codecli.llm.model_profiles import DEFAULT_MODEL_PROFILES, ModelProfile, CustomModelStore, PROVIDER_DEFAULTS
-from codecli.memory.manager import MemoryManager
+from codecli.memory.auto_memory import AutoMemoryStore
 from codecli.policy.audit_log import AuditLog
 from codecli.prompt.assembler import PromptAssembler
 from codecli.rag import CodeIndex
@@ -231,7 +231,6 @@ async def _handle_slash(
         agent.clear_history()
         console.clear()
     elif command == "/context":
-        memories = MemoryManager(config.memory.long_term_db_path, scope=cwd).list(limit=5)
         table = Table(title="CodeCLI Context")
         table.add_column("Field")
         table.add_column("Value")
@@ -239,22 +238,35 @@ async def _handle_slash(
         table.add_row("model", f"{config.llm.model} ({config.llm.provider})")
         table.add_row("context window", str(agent.llm_client.max_context_window))
         table.add_row("render", config.render_mode)
-        table.add_row("memory", f"{len(memories)} recent entries")
+        if config.features.memory and config.auto_memory.enabled:
+            store = AutoMemoryStore(config.auto_memory.root, cwd)
+            stats = store.stats()
+            table.add_row(
+                "auto memory",
+                f"{stats['topic_files']} files, {stats['index_lines']} index lines "
+                f"({'ok' if stats['index_within_limits'] else 'OVER LIMIT'}) "
+                f"({stats['recalled_files']} recalled)",
+            )
+        else:
+            table.add_row("auto memory", "disabled")
         table.add_row("tools", str(len(registry.list_name())))
         console.print(table)
     elif command == "/memory":
-        await _memory_command(arg, console, cwd, config)
+        await _memory_command(arg, console, cwd, config, agent, registry)
     elif command == "/save":
         if not arg:
             console.print("[red]Usage:[/red] /save <fact>")
+        elif config.features.memory and config.auto_memory.enabled:
+            console.print(
+                "[yellow]Auto Memory is active:[/yellow] the model maintains MEMORY.md with "
+                "the file tools and decides the memory type. Say "
+                f"[bold]\"记住：{arg}\"[/bold] in a normal message instead."
+            )
         else:
-            memory_id = MemoryManager(
-                config.memory.long_term_db_path,
-                scope=cwd,
-                max_entries=config.memory.max_long_term_entries,
-                max_content_length=config.memory.max_memory_chars,
-            ).save(arg, source="manual", importance=0.8)
-            console.print(f"Saved memory #{memory_id}")
+            console.print(
+                "[yellow]Auto Memory is disabled[/yellow] — enable it (config: "
+                "auto_memory.enabled = true) to use persistent memory."
+            )
     elif command == "/config":
         console.print_json(json.dumps(config_to_public_dict(config), ensure_ascii=False))
     elif command == "/tools":
@@ -341,27 +353,115 @@ async def _handle_slash(
     return False
 
 
-async def _memory_command(arg: str, console: Console, cwd: str, config: CodeCliConfig) -> None:
-    manager = MemoryManager(
-        config.memory.long_term_db_path,
-        scope=cwd,
-        max_entries=config.memory.max_long_term_entries,
-        max_content_length=config.memory.max_memory_chars,
+async def _memory_command(
+    arg: str,
+    console: Console,
+    cwd: str,
+    config: CodeCliConfig,
+    agent: Agent | None = None,
+    registry: ToolRegistry | None = None,
+) -> None:
+    if config.features.memory and config.auto_memory.enabled:
+        await _auto_memory_command(arg, console, cwd, config, agent, registry)
+        return
+    console.print(
+        "[yellow]Auto Memory is disabled[/yellow] — enable it (config: "
+        "auto_memory.enabled = true). `/memory` manages the Markdown memory "
+        "directory, not a database."
+    )
+
+
+async def _auto_memory_command(
+    arg: str,
+    console: Console,
+    cwd: str,
+    config: CodeCliConfig,
+    agent: Agent | None = None,
+    registry: ToolRegistry | None = None,
+) -> None:
+    """Claude Code style Auto Memory subcommands: list / stats / open / clear /
+    dream / migrate."""
+    store = AutoMemoryStore(
+        config.auto_memory.root,
+        cwd,
+        max_index_lines=config.auto_memory.max_index_lines,
+        max_index_bytes=config.auto_memory.max_index_bytes,
+        max_index_line_chars=config.auto_memory.max_index_line_chars,
     )
     sub, _, rest = arg.partition(" ")
+    if sub == "stats":
+        console.print_json(json.dumps(store.stats(), ensure_ascii=False, indent=2))
+        return
+    if sub == "dream":
+        if agent is None:
+            console.print("[red]/memory dream requires an active agent session[/red]")
+            return
+        console.print("[yellow]Running manual memory extraction (dream)...[/yellow]")
+        from codecli.memory.extractor import run_extraction
+
+        status, detail = await run_extraction(
+            cwd,
+            config,
+            agent.llm_client,
+            agent.history,
+            registry=registry,
+            force=True,
+        )
+        if status == "done":
+            console.print(f"[green]Extraction complete:[/green] {detail or '(nothing written)'}")
+        else:
+            console.print(f"{status}: {detail}")
+        return
+    if sub == "migrate":
+        from codecli.memory.extractor import migrate_legacy
+        from codecli.memory.legacy import legacy_db_default
+
+        legacy_db = rest.strip() or legacy_db_default()
+        result = migrate_legacy(legacy_db, cwd, store)
+        console.print_json(json.dumps(result, ensure_ascii=False, indent=2))
+        console.print(
+            f"[dim]Imported from legacy SQLite database {legacy_db} (read-only; "
+            "the old file is left untouched).[/dim]"
+        )
+        return
+    if sub == "open":
+        if not store.memory_dir.is_dir():
+            console.print(f"[red]Memory directory does not exist yet:[/red] {store.memory_dir}")
+            return
+        if os.name == "nt":
+            os.startfile(str(store.memory_dir))  # type: ignore[attr-defined]
+        else:
+            console.print(f"Open: {store.memory_dir}")
+        return
     if sub == "clear":
-        count = manager.clear()
-        console.print(f"Cleared {count} memories.")
-    elif sub == "search":
-        rows = manager.search(rest)
-        console.print("\n".join(f"#{row.id} {row.content}" for row in rows) or "(no matches)")
-    elif sub == "stats":
-        console.print_json(json.dumps(manager.stats(), ensure_ascii=False))
-    elif sub == "delete" and rest.strip().isdigit():
-        console.print(f"Deleted: {manager.delete(int(rest.strip()))}")
+        if rest.strip() != "confirm":
+            console.print(
+                "[yellow]This deletes every topic file and MEMORY.md for this project.[/yellow]\n"
+                f"Run [bold]/memory clear confirm[/bold] to proceed. Directory: {store.memory_dir}"
+            )
+            return
+        if not store.memory_dir.is_dir():
+            console.print("(memory directory is empty)")
+            return
+        removed = 0
+        for path in store.memory_dir.glob("*.md"):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError as exc:
+                console.print(f"[red]Failed to delete {path.name}: {exc}[/red]")
+        console.print(f"Cleared {removed} memory files.")
+        return
+
+    index_text = store.read_index()
+    if index_text.strip():
+        console.print(index_text[:8_000])
     else:
-        rows = manager.list()
-        console.print("\n".join(f"#{row.id} {row.content}" for row in rows) or "(no memories)")
+        console.print("(no Auto Memory yet — memories appear after the model saves them)")
+    headers = store.scan()
+    if headers:
+        console.print("\n[bold]Topic files:[/bold]")
+        console.print("\n".join(header.to_manifest_line() for header in headers))
 
 
 def _hitl_command(

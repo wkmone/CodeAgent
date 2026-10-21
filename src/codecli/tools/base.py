@@ -26,6 +26,9 @@ class ToolContext:
         None
     )
     skill_context_buffer: Any | None = None
+    # Claude Code style Auto Memory directory: generic file tools are allowed
+    # to read/write it in addition to the workspace (createAutoMemCanUseTool).
+    memory_dir: str | None = None
 
 
 @dataclass(slots=True)

@@ -36,14 +36,38 @@ class McpConfig:
     auto_start: bool = True
 
 @dataclass(slots=True)
+class AutoMemoryConfig:
+    """Claude Code style Markdown auto memory (MEMORY.md index + topic files).
+
+    Aligned with the leaked Claude Code v2.1.88 memory implementation:
+    sanitized-git-root project dirs, two-step writes (topic file, then index
+    line), 200-line / 25KB index with <=150 chars per line, LLM side-call
+    selection of up to ``recall_max_files`` topic files per user turn.
+    """
+
+    enabled: bool = True
+    root: str = "~/.codecli/memory"
+    max_index_lines: int = 200
+    max_index_bytes: int = 25 * 1024
+    max_index_line_chars: int = 150
+    sidecall_enabled: bool = True
+    sidecall_model: str = ""  # empty = reuse the main LLM client
+    recall_max_files: int = 5
+    write_after_error: bool = True  # v2.1.214+ behavior: surface over-limit to the model
+    # Post-session extractor (Auto Dream): a forked agent with restricted
+    # tools consolidates memories after the session ends. Triggered when the
+    # last run is >= extract_min_interval_hours ago AND at least
+    # extract_min_sessions sessions have passed (both gates, like Claude).
+    extractor_enabled: bool = True
+    extract_min_sessions: int = 5
+    extract_min_interval_hours: float = 24.0
+    extract_max_turns: int = 5
+    extract_message_window: int = 40
+
+
+@dataclass(slots=True)
 class MemoryConfig:
     max_conversation_history: int = 100
-    long_term_enabled: bool = True
-    long_term_db_path: str = "~/.codecli/memory.db"
-    max_long_term_entries: int = 1_000
-    max_memory_chars: int = 8_000
-    recall_limit: int = 6
-    recall_min_score: float = 0.05
     token_budget_mode: str = "balanced"
     compression_threshold: float = 0.8
     compression_target: float = 0.55
@@ -95,6 +119,7 @@ class CodeCliConfig:
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     mcp: McpConfig = field(default_factory=McpConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    auto_memory: AutoMemoryConfig = field(default_factory=AutoMemoryConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
@@ -133,7 +158,7 @@ def load_config(
 
     config = _apply_env(config, env_map)
     result_config = _dict_to_config(config)
-    result_config.memory.long_term_db_path = _expand_home(result_config.memory.long_term_db_path)
+    result_config.auto_memory.root = _expand_home(result_config.auto_memory.root)
     result_config.policy.audit_log_path = _expand_home(result_config.policy.audit_log_path)
     return result_config
 
@@ -243,6 +268,19 @@ def _apply_env(config: dict[str, Any], env: dict[str, str | None]) -> dict[str, 
         elif raw == "true":
             features[feature_key] = True
 
+    auto_memory = result.setdefault("auto_memory", {})
+    for env_key, config_key in [
+        ("CODECLI_AUTO_MEMORY", "enabled"),
+        ("CODECLI_AUTO_MEMORY_SIDECALL", "sidecall_enabled"),
+        ("CODECLI_AUTO_MEMORY_WRITE_ERROR", "write_after_error"),
+        ("CODECLI_AUTO_MEMORY_EXTRACTOR", "extractor_enabled"),
+    ]:
+        raw = env.get(env_key)
+        if raw == "false":
+            auto_memory[config_key] = False
+        elif raw == "true":
+            auto_memory[config_key] = True
+
     return result
 
 def _dict_to_config(data: dict[str, Any]) -> CodeCliConfig:
@@ -252,6 +290,7 @@ def _dict_to_config(data: dict[str, Any]) -> CodeCliConfig:
         prompt=PromptConfig(**data.get("prompt", {})),
         mcp=McpConfig(**data.get("mcp", {})),
         memory=MemoryConfig(**data.get("memory", {})),
+        auto_memory=AutoMemoryConfig(**data.get("auto_memory", {})),
         policy=PolicyConfig(**data.get("policy", {})),
         features=FeatureConfig(**data.get("features", {}))
     )
